@@ -98,7 +98,7 @@ def create_session(name, working_dir=None, initial_command=None):
         return False, f"Session '{name}' already exists"
     
     # Build creation command - set reasonable window size
-    cmd_args = ["new-session", "-d", "-s", session_name, "-x", "200", "-y", "50"]
+    cmd_args = ["new-session", "-d", "-s", session_name, "-x", "120", "-y", "30"]
     
     if working_dir and os.path.isdir(working_dir):
         cmd_args.extend(["-c", working_dir])
@@ -111,8 +111,10 @@ def create_session(name, working_dir=None, initial_command=None):
     # Set up session with larger scrollback
     run_tmux("set-option", "-t", session_name, "history-limit", "50000")
     
-    # Send initial command if provided
+    # Send initial command if provided - wait a bit for shell to be ready
     if initial_command:
+        import time
+        time.sleep(0.3)  # Wait for shell prompt to be ready
         send_keys(session_name, initial_command, enter=True)
     
     return True, session_name
@@ -221,8 +223,22 @@ def get_pane_content_and_cursor(session_name):
     if content_rc != 0:
         return None, stderr or "Failed to capture output"
     
+    # Don't strip trailing lines - we need them for cursor positioning
+    # But do strip trailing whitespace from each line
+    lines = content_stdout.split('\n')
+    
+    # Find the last non-empty line
+    last_content_line = 0
+    for i, line in enumerate(lines):
+        if line.strip():
+            last_content_line = i
+    
+    # Keep lines up to cursor position or last content, whichever is greater
+    keep_until = max(last_content_line, cursor_y) + 1
+    trimmed_lines = lines[:keep_until]
+    
     return {
-        "content": content_stdout,
+        "content": '\n'.join(trimmed_lines),
         "cursor_x": cursor_x,
         "cursor_y": cursor_y,
         "width": pane_width,
