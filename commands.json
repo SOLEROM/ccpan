@@ -4,5 +4,11 @@
       "label": "cc",
       "command": "clear"
     }
+  ],
+  "cp-a1": [
+    {
+      "label": "aaa",
+      "command": "ls"
+    }
   ]
 }

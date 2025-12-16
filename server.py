@@ -134,7 +134,7 @@ def destroy_session(session_name):
     return True, "Session destroyed"
 
 
-def send_keys(session_name, keys, enter=False):
+def send_keys(session_name, keys, enter=False, raw=False):
     """Send keystrokes to a tmux session."""
     if not session_name.startswith(SESSION_PREFIX):
         session_name = f"{SESSION_PREFIX}{session_name}"
@@ -142,8 +142,12 @@ def send_keys(session_name, keys, enter=False):
     if not session_exists(session_name):
         return False, f"Session '{session_name}' does not exist"
     
-    # Use literal flag to send keys as-is
-    if enter:
+    if raw:
+        # Raw mode: send keys exactly as received from xterm.js
+        # This handles special keys like Enter, Backspace, Arrow keys, etc.
+        # xterm.js sends these as escape sequences
+        stdout, stderr, rc = run_tmux("send-keys", "-t", session_name, "-l", keys)
+    elif enter:
         # Send command followed by Enter
         stdout, stderr, rc = run_tmux("send-keys", "-t", session_name, "-l", keys)
         if rc != 0:
@@ -160,55 +164,70 @@ def send_keys(session_name, keys, enter=False):
 
 
 def capture_output(session_name, lines=None):
-    """Capture recent output from a tmux session."""
+    """Capture recent output from a tmux session with escape sequences."""
     if not session_name.startswith(SESSION_PREFIX):
         session_name = f"{SESSION_PREFIX}{session_name}"
     
     if not session_exists(session_name):
         return None, f"Session '{session_name}' does not exist"
     
-    lines = lines or SCROLLBACK_LINES
-    
-    # Capture the ENTIRE pane content including scrollback history
-    # -S - : start from the beginning of history
-    # -E - : end at the end (current cursor position area)
-    # -p : print to stdout
+    # Capture visible pane content with escape sequences for colors
     stdout, stderr, rc = run_tmux(
         "capture-pane",
         "-t", session_name,
         "-p",           # Print to stdout
-        "-S", "-",      # Start from beginning of scrollback (captures ALL history)
-        "-E", "-"       # End at the end
+        "-e",           # Include escape sequences (ANSI colors)
     )
     
     if rc != 0:
         return None, stderr or "Failed to capture output"
     
-    # Get the output and trim excessive leading empty lines
-    output = stdout
+    return stdout, None
+
+
+def get_pane_content_and_cursor(session_name):
+    """Get pane content along with cursor position for proper terminal sync."""
+    if not session_name.startswith(SESSION_PREFIX):
+        session_name = f"{SESSION_PREFIX}{session_name}"
     
-    # Split into lines and find where content starts
-    output_lines = output.split('\n')
+    if not session_exists(session_name):
+        return None, f"Session '{session_name}' does not exist"
     
-    # Find first non-empty line
-    start_idx = 0
-    for i, line in enumerate(output_lines):
-        if line.strip():
-            start_idx = i
-            break
+    # Get pane info including cursor position
+    info_stdout, _, info_rc = run_tmux(
+        "display-message", "-t", session_name, "-p", 
+        "#{cursor_x}:#{cursor_y}:#{pane_width}:#{pane_height}"
+    )
     
-    # Also trim excessive trailing empty lines but keep a few
-    end_idx = len(output_lines)
-    empty_count = 0
-    for i in range(len(output_lines) - 1, -1, -1):
-        if output_lines[i].strip():
-            end_idx = i + 1 + min(empty_count, 3)  # Keep up to 3 trailing empty lines
-            break
-        empty_count += 1
+    cursor_x, cursor_y, pane_width, pane_height = 0, 0, 80, 24
+    if info_rc == 0 and info_stdout:
+        try:
+            parts = info_stdout.strip().split(':')
+            cursor_x = int(parts[0])
+            cursor_y = int(parts[1])
+            pane_width = int(parts[2])
+            pane_height = int(parts[3])
+        except (ValueError, IndexError):
+            pass
     
-    cleaned_output = '\n'.join(output_lines[start_idx:end_idx])
+    # Capture visible pane with escape sequences
+    content_stdout, stderr, content_rc = run_tmux(
+        "capture-pane",
+        "-t", session_name,
+        "-p",           # Print to stdout
+        "-e",           # Include escape sequences (colors)
+    )
     
-    return cleaned_output, None
+    if content_rc != 0:
+        return None, stderr or "Failed to capture output"
+    
+    return {
+        "content": content_stdout,
+        "cursor_x": cursor_x,
+        "cursor_y": cursor_y,
+        "width": pane_width,
+        "height": pane_height
+    }, None
 
 
 def send_signal(session_name, signal="INT"):
@@ -283,11 +302,20 @@ def api_destroy_session(session_name):
 @app.route("/api/sessions/<session_name>/output", methods=["GET"])
 def api_get_output(session_name):
     """Get output from a session."""
-    lines = request.args.get("lines", SCROLLBACK_LINES, type=int)
-    output, error = capture_output(session_name, lines)
+    output, error = capture_output(session_name)
     
     if output is not None:
         return jsonify({"success": True, "output": output})
+    return jsonify({"success": False, "error": error}), 400
+
+
+@app.route("/api/sessions/<session_name>/terminal", methods=["GET"])
+def api_get_terminal_state(session_name):
+    """Get terminal state including cursor position for xterm.js sync."""
+    state, error = get_pane_content_and_cursor(session_name)
+    
+    if state is not None:
+        return jsonify({"success": True, **state})
     return jsonify({"success": False, "error": error}), 400
 
 
@@ -297,11 +325,12 @@ def api_send_keys(session_name):
     data = request.get_json() or {}
     keys = data.get("keys", "")
     enter = data.get("enter", True)
+    raw = data.get("raw", False)
     
     if not keys:
         return jsonify({"success": False, "error": "No keys provided"}), 400
     
-    success, result = send_keys(session_name, keys, enter)
+    success, result = send_keys(session_name, keys, enter, raw)
     
     if success:
         return jsonify({"success": True, "message": result})
@@ -335,6 +364,30 @@ def api_run_command(session_name):
     if success:
         return jsonify({"success": True, "message": result})
     return jsonify({"success": False, "error": result}), 400
+
+
+@app.route("/api/sessions/<session_name>/resize", methods=["POST"])
+def api_resize_session(session_name):
+    """Resize the tmux pane to match xterm.js dimensions."""
+    if not session_name.startswith(SESSION_PREFIX):
+        session_name = f"{SESSION_PREFIX}{session_name}"
+    
+    data = request.get_json() or {}
+    cols = data.get("cols", 80)
+    rows = data.get("rows", 24)
+    
+    # Resize the tmux window/pane
+    stdout, stderr, rc = run_tmux(
+        "resize-window", "-t", session_name, "-x", str(cols), "-y", str(rows)
+    )
+    
+    if rc != 0:
+        # Try resize-pane as fallback
+        stdout, stderr, rc = run_tmux(
+            "resize-pane", "-t", session_name, "-x", str(cols), "-y", str(rows)
+        )
+    
+    return jsonify({"success": rc == 0, "cols": cols, "rows": rows})
 
 
 # Custom commands storage endpoints

@@ -1,15 +1,24 @@
-# Tmux Control Panel
+# Tmux Control Panel v1
 
 A local web-based control panel for running and managing multiple long-running shell or Docker workloads in parallel. Each workload runs in its own real interactive shell backed by a dedicated tmux session.
 
+**v1 Features: Now with xterm.js for a real terminal experience!**
 
-![alt text](image.png)
+## What's New in v1
+
+- **xterm.js Terminal** - Full terminal emulator with proper escape sequence handling
+- **Direct Typing** - Type directly in the terminal, no separate input box needed
+- **Better Colors** - ANSI color support for colorful command output
+- **Clickable Links** - URLs in terminal output are clickable
+- **Proper Scrollback** - 10,000 lines of scrollback with smooth scrolling
+- **Faster Updates** - 300ms refresh rate for smoother experience
+- **Cursor Support** - Blinking cursor, proper cursor positioning
 
 ## Features
 
 - **Multiple Sessions** - Run multiple workloads in parallel, each in its own tab
 - **Real TTY** - Each session is a real tmux session with full PTY support
-- **Live Output** - Terminal output refreshes every 500ms
+- **Live Output** - Terminal output with xterm.js rendering
 - **Quick Commands** - Add custom command buttons per session (server-side storage)
 - **Signal Control** - Send Ctrl+C, Ctrl+Z signals to running processes
 - **Persistent** - Sessions survive browser refresh and server restart
@@ -25,16 +34,25 @@ A local web-based control panel for running and managing multiple long-running s
 │   │  Tab 1  │ │  Tab 2  │ │  Tab 3  │    ← One tab per session      │
 │   └─────────┘ └─────────┘ └─────────┘                               │
 │                                                                      │
-│   [Terminal Output] [Quick Commands] [Signal Buttons]               │
+│   ┌─────────────────────────────────────────────────────────────┐   │
+│   │                    xterm.js Terminal                         │   │
+│   │  $ npm run dev                                               │   │
+│   │  > server@1.0.0 dev                                          │   │
+│   │  > nodemon index.js                                          │   │
+│   │  [nodemon] watching...                                       │   │
+│   │  █                                                           │   │
+│   └─────────────────────────────────────────────────────────────┘   │
+│                                                                      │
+│   [Quick Commands] [Signal Buttons]                                 │
 └─────────────────────────────────────────────────────────────────────┘
                               │
-                              │ HTTP/JSON API (polling)
+                              │ HTTP/JSON API (polling @ 300ms)
                               ▼
 ┌─────────────────────────────────────────────────────────────────────┐
 │                    FLASK SERVER (Python)                             │
 │                                                                      │
 │   • Creates/destroys tmux sessions                                  │
-│   • Sends keystrokes to sessions                                    │
+│   • Sends keystrokes (raw mode for xterm.js)                        │
 │   • Captures session output                                         │
 │   • Stores custom commands (commands.json)                          │
 └─────────────────────────────────────────────────────────────────────┘
@@ -46,30 +64,11 @@ A local web-based control panel for running and managing multiple long-running s
 │                                                                      │
 │   ┌──────────────┐  ┌──────────────┐  ┌──────────────┐              │
 │   │ cp-session1  │  │ cp-session2  │  │ cp-session3  │              │
-│   │              │  │              │  │              │              │
 │   │  [bash/PTY]  │  │  [npm/PTY]   │  │ [python/PTY] │              │
-│   │              │  │              │  │              │              │
 │   │ [scrollback] │  │ [scrollback] │  │ [scrollback] │              │
 │   └──────────────┘  └──────────────┘  └──────────────┘              │
-│                                                                      │
-│   tmux manages: process lifetime, TTY, scrollback, isolation        │
 └─────────────────────────────────────────────────────────────────────┘
 ```
-
-## How It Works
-
-1. **tmux owns the sessions** - Each tab corresponds to a tmux session with a real PTY
-2. **Flask is a bridge** - The server translates HTTP requests to tmux commands
-3. **Browser is a viewer** - The UI polls for output and sends user input
-4. **No direct execution** - Commands are sent as keystrokes to tmux, not executed directly
-
-### Key Design Principles
-
-- All state lives in tmux, not in the UI
-- Sessions persist even if the browser disconnects
-- Full terminal programs (vim, htop, etc.) work correctly
-- Each session is isolated from others
-- Everything is inspectable via standard tmux commands
 
 ## Prerequisites
 
@@ -83,16 +82,14 @@ sudo apt install -y tmux python3 python3-venv python3-pip
 ## Quick Setup
 
 ```bash
-# Clone or download the project
-cd tmux-control-panel
+cd tmux-control-panel-v1
 
 # Create virtual environment
 python3 -m venv venv
 source venv/bin/activate
 
 # Install dependencies
-pip install --upgrade pip
-pip install -r requirements.txt
+pip install flask flask-cors
 
 # Run the server
 python server.py
@@ -100,17 +97,10 @@ python server.py
 
 Open **http://127.0.0.1:5000** in your browser.
 
-Or use the setup script:
-
-```bash
-chmod +x setup.sh
-./setup.sh
-```
-
 ## Project Structure
 
 ```
-tmux-control-panel/
+tmux-control-panel-v1/
 ├── server.py           # Flask backend
 ├── requirements.txt    # Python dependencies
 ├── setup.sh            # Quick setup script
@@ -118,7 +108,7 @@ tmux-control-panel/
 ├── README.md
 ├── venv/               # Virtual environment
 └── templates/
-    └── index.html      # Web UI
+    └── index.html      # Web UI with xterm.js
 ```
 
 ## Usage
@@ -126,54 +116,45 @@ tmux-control-panel/
 ### Creating Sessions
 
 1. Click **"+ New Session"**
-2. Enter a session name (e.g., "dev-server")
+2. Enter a session name
 3. Optionally set a working directory
-4. Optionally set an initial command to run
+4. Optionally set an initial command
 5. Click **"Create"**
 
-### Running Commands
+### Using the Terminal
 
-- **Command Input**: Type in the input box and press Enter
-- **Quick Commands**: Click custom command buttons
-- **Built-in Buttons**:
-  - ⏹ Stop - Sends Ctrl+C (SIGINT)
-  - ⏸ Suspend - Sends Ctrl+Z (SIGSTOP)
-  - 🔄 Clear - Runs `clear` command
+- **Click the terminal** to focus it
+- **Type directly** - keystrokes go straight to the shell
+- **Arrow keys work** - command history, cursor movement
+- **Tab completion works** - just press Tab
+- **Ctrl+C** - interrupt running process
+- **Ctrl+D** - send EOF
+- **Ctrl+L** - clear screen
+
+### Quick Commands & Buttons
+
+- **⏹ Stop** - Sends Ctrl+C (SIGINT)
+- **⏸ Suspend** - Sends Ctrl+Z (SIGSTOP)
+- **🔄 Clear** - Runs `clear` command
+- **+ Add** - Create custom command buttons
 
 ### Custom Quick Commands
 
-1. Click **"+ Add"** in the Quick Commands bar
-2. Enter a button label and the command
-3. Commands are stored on the server in `commands.json`
-4. Click the **×** button next to a command to delete it
-
-Quick commands persist across:
-- Browser refresh ✅
-- Server restart ✅
-- Different browsers ✅
-- Different devices (same server) ✅
-
-### Keyboard Shortcuts
-
-- **Ctrl+T** - Open new session modal
-- **Escape** - Close any open modal
-- **Enter** - Send command (when input is focused)
+Commands are stored server-side in `commands.json`:
+- Persist across browser refresh ✅
+- Persist across server restart ✅
+- Work from any browser/device ✅
 
 ## Direct tmux Access
 
-Sessions are real tmux sessions. You can attach directly for debugging or advanced use:
-
 ```bash
-# List all control panel sessions
+# List sessions
 tmux -L control-panel list-sessions
 
 # Attach to a session
 tmux -L control-panel attach -t cp-SESSION_NAME
 
-# Detach from session: Ctrl+B, then D
-
-# Kill a session manually
-tmux -L control-panel kill-session -t cp-SESSION_NAME
+# Detach: Ctrl+B, then D
 ```
 
 ## API Reference
@@ -184,11 +165,11 @@ tmux -L control-panel kill-session -t cp-SESSION_NAME
 |----------|--------|-------------|
 | `/api/sessions` | GET | List all sessions |
 | `/api/sessions` | POST | Create new session |
-| `/api/sessions/<name>` | DELETE | Destroy session |
-| `/api/sessions/<name>/output` | GET | Get terminal output |
-| `/api/sessions/<name>/send` | POST | Send keystrokes |
-| `/api/sessions/<name>/signal` | POST | Send signal (INT, STOP, etc.) |
-| `/api/sessions/<name>/command` | POST | Run a command |
+| `/api/sessions/<n>` | DELETE | Destroy session |
+| `/api/sessions/<n>/output` | GET | Get terminal output |
+| `/api/sessions/<n>/send` | POST | Send keystrokes (supports `raw` mode) |
+| `/api/sessions/<n>/signal` | POST | Send signal |
+| `/api/sessions/<n>/command` | POST | Run a command |
 
 ### Custom Commands
 
@@ -199,125 +180,95 @@ tmux -L control-panel kill-session -t cp-SESSION_NAME
 | `/api/commands/<session>` | POST | Add a command |
 | `/api/commands/<session>/<index>` | DELETE | Delete a command |
 
-### Other
+### Raw Key Mode
 
-| Endpoint | Method | Description |
-|----------|--------|-------------|
-| `/api/health` | GET | Health check |
-| `/api/sessions/<name>/debug` | GET | Debug capture output |
-
-### Example API Usage
+v1 adds `raw` mode for xterm.js integration:
 
 ```bash
-# Create a session
-curl -X POST http://127.0.0.1:5000/api/sessions \
+# Raw mode sends keys exactly as received (escape sequences, etc.)
+curl -X POST http://127.0.0.1:5000/api/sessions/cp-test/send \
   -H "Content-Type: application/json" \
-  -d '{"name": "myapp", "initial_command": "npm run dev"}'
-
-# Send a command
-curl -X POST http://127.0.0.1:5000/api/sessions/cp-myapp/send \
-  -H "Content-Type: application/json" \
-  -d '{"keys": "echo hello", "enter": true}'
-
-# Get output
-curl http://127.0.0.1:5000/api/sessions/cp-myapp/output
-
-# Send Ctrl+C
-curl -X POST http://127.0.0.1:5000/api/sessions/cp-myapp/signal \
-  -H "Content-Type: application/json" \
-  -d '{"signal": "INT"}'
-
-# Add a quick command
-curl -X POST http://127.0.0.1:5000/api/commands/cp-myapp \
-  -H "Content-Type: application/json" \
-  -d '{"label": "Build", "command": "npm run build"}'
-```
-
-## Running as a Systemd Service
-
-Create `/etc/systemd/system/tmux-control-panel.service`:
-
-```ini
-[Unit]
-Description=Tmux Control Panel
-After=network.target
-
-[Service]
-Type=simple
-User=YOUR_USERNAME
-WorkingDirectory=/home/YOUR_USERNAME/tmux-control-panel
-Environment="PATH=/home/YOUR_USERNAME/tmux-control-panel/venv/bin"
-ExecStart=/home/YOUR_USERNAME/tmux-control-panel/venv/bin/python server.py
-Restart=always
-RestartSec=3
-
-[Install]
-WantedBy=multi-user.target
-```
-
-Enable and start:
-
-```bash
-sudo systemctl daemon-reload
-sudo systemctl enable tmux-control-panel
-sudo systemctl start tmux-control-panel
-sudo systemctl status tmux-control-panel
+  -d '{"keys": "ls -la\r", "raw": true}'
 ```
 
 ## Configuration
 
-Edit these variables at the top of `server.py`:
+Edit `server.py`:
 
 ```python
-TMUX_SOCKET = "control-panel"  # tmux socket name (isolates from your other sessions)
-SCROLLBACK_LINES = 2000        # Lines of history to capture
-SESSION_PREFIX = "cp-"         # Prefix for managed sessions
-COMMANDS_FILE = "commands.json" # Custom commands storage file
+TMUX_SOCKET = "control-panel"  # tmux socket name
+SCROLLBACK_LINES = 2000        # Lines to capture
+SESSION_PREFIX = "cp-"         # Session prefix
+COMMANDS_FILE = "commands.json" # Commands storage
+```
+
+## xterm.js Configuration
+
+The terminal is configured in `index.html`:
+
+```javascript
+const term = new Terminal({
+    cursorBlink: true,
+    fontSize: 14,
+    fontFamily: 'Consolas, "Courier New", monospace',
+    scrollback: 10000,
+    theme: {
+        background: '#0a0a0a',
+        foreground: '#c8c8c8',
+        cursor: '#4ecca3',
+        // ... colors
+    }
+});
 ```
 
 ## Troubleshooting
 
-### "tmux: command not found"
-```bash
-sudo apt install tmux
-```
+### Terminal not responding to input
+- Click the terminal to focus it
+- Check browser console for errors
 
-### Sessions not showing in UI
-```bash
-# Check if tmux server is running
-tmux -L control-panel list-sessions
+### Colors not showing
+- Make sure the command outputs ANSI colors
+- Try: `ls --color=always`
 
-# Check server logs
-python server.py --debug
-```
-
-### Output not updating
-```bash
-# Test capture manually
-tmux -L control-panel capture-pane -t cp-SESSION -p -S - -E -
-```
-
-### Port already in use
-```bash
-# Use a different port
-python server.py --port 5001
-
-# Or find and kill the process
-lsof -i :5000
-kill <PID>
-```
-
-### Commands not saving
-- Check that `commands.json` is writable
-- Check server logs for errors
+### Slow/laggy updates
+- Check network latency
+- Reduce refresh interval if needed
 
 ## Security Notes
 
-⚠️ **Important Security Considerations:**
+⚠️ **Important:**
+- Server binds to `127.0.0.1` only
+- Do NOT expose without authentication
+- Sessions run with server permissions
 
-- The server binds to `127.0.0.1` by default (localhost only)
-- **Do NOT expose to public networks without authentication**
-- Sessions run with the same permissions as the server process
-- Anyone with access to the UI can run arbitrary commands
-- Consider using a reverse proxy with authentication for remote access
+## Dependencies
 
+- **Server**: Flask, Flask-CORS
+- **Client**: xterm.js (loaded from CDN)
+  - xterm.js 5.3.0
+  - xterm-addon-fit 0.8.0
+  - xterm-addon-web-links 0.9.0
+
+## License
+
+MIT License
+
+---
+
+## Changelog
+
+### v1.0.0
+- Upgraded terminal to xterm.js
+- Added raw key input mode
+- Direct typing in terminal
+- ANSI color support
+- Clickable links
+- 10,000 line scrollback
+- Faster 300ms refresh rate
+
+### v0.1.0
+- Initial release
+- Basic terminal display
+- Session management
+- Quick commands with server storage
