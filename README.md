@@ -2,6 +2,9 @@
 
 A local web-based control panel for running and managing multiple long-running shell or Docker workloads in parallel. Each workload runs in its own real interactive shell backed by a dedicated tmux session.
 
+
+![alt text](image.png)
+
 ## Features
 
 - **Multiple Sessions** - Run multiple workloads in parallel, each in its own tab
@@ -88,7 +91,8 @@ python3 -m venv venv
 source venv/bin/activate
 
 # Install dependencies
-pip install flask flask-cors
+pip install --upgrade pip
+pip install -r requirements.txt
 
 # Run the server
 python server.py
