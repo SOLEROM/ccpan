@@ -1,0 +1,979 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Tmux Control Panel</title>
+    <style>
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+
+        :root {
+            --bg-primary: #1a1a2e;
+            --bg-secondary: #16213e;
+            --bg-tertiary: #0f0f23;
+            --text-primary: #e8e8e8;
+            --text-secondary: #a0a0a0;
+            --accent: #4ecca3;
+            --accent-hover: #3db892;
+            --danger: #e74c3c;
+            --danger-hover: #c0392b;
+            --warning: #f39c12;
+            --border: #2d2d44;
+        }
+
+        body {
+            font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+            background: var(--bg-primary);
+            color: var(--text-primary);
+            min-height: 100vh;
+        }
+
+        .container {
+            max-width: 1600px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+
+        header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 24px;
+            padding-bottom: 16px;
+            border-bottom: 1px solid var(--border);
+        }
+
+        h1 {
+            font-size: 1.5rem;
+            font-weight: 600;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        h1::before {
+            content: "⬢";
+            color: var(--accent);
+        }
+
+        .header-actions {
+            display: flex;
+            gap: 12px;
+        }
+
+        button {
+            padding: 8px 16px;
+            border: none;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 0.875rem;
+            font-weight: 500;
+            transition: all 0.2s;
+        }
+
+        .btn-primary {
+            background: var(--accent);
+            color: var(--bg-primary);
+        }
+
+        .btn-primary:hover {
+            background: var(--accent-hover);
+        }
+
+        .btn-secondary {
+            background: var(--bg-secondary);
+            color: var(--text-primary);
+            border: 1px solid var(--border);
+        }
+
+        .btn-secondary:hover {
+            background: var(--border);
+        }
+
+        .btn-danger {
+            background: var(--danger);
+            color: white;
+        }
+
+        .btn-danger:hover {
+            background: var(--danger-hover);
+        }
+
+        .btn-small {
+            padding: 6px 12px;
+            font-size: 0.75rem;
+        }
+
+        /* Tabs */
+        .tabs-container {
+            display: flex;
+            gap: 4px;
+            margin-bottom: 20px;
+            flex-wrap: wrap;
+            background: var(--bg-tertiary);
+            padding: 8px;
+            border-radius: 8px;
+        }
+
+        .tab {
+            padding: 10px 20px;
+            background: transparent;
+            border: none;
+            color: var(--text-secondary);
+            cursor: pointer;
+            border-radius: 6px;
+            font-size: 0.875rem;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            transition: all 0.2s;
+        }
+
+        .tab:hover {
+            background: var(--bg-secondary);
+            color: var(--text-primary);
+        }
+
+        .tab.active {
+            background: var(--accent);
+            color: var(--bg-primary);
+        }
+
+        .tab .close-tab {
+            opacity: 0.6;
+            font-size: 1rem;
+            line-height: 1;
+        }
+
+        .tab:hover .close-tab {
+            opacity: 1;
+        }
+
+        .tab.active .close-tab {
+            opacity: 0.8;
+        }
+
+        /* Session Panel */
+        .session-panel {
+            display: none;
+            background: var(--bg-secondary);
+            border-radius: 12px;
+            overflow: hidden;
+        }
+
+        .session-panel.active {
+            display: block;
+        }
+
+        .panel-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 16px 20px;
+            background: var(--bg-tertiary);
+            border-bottom: 1px solid var(--border);
+        }
+
+        .panel-info {
+            display: flex;
+            align-items: center;
+            gap: 16px;
+        }
+
+        .status-indicator {
+            width: 10px;
+            height: 10px;
+            border-radius: 50%;
+            background: var(--accent);
+            animation: pulse 2s infinite;
+        }
+
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.5; }
+        }
+
+        .panel-actions {
+            display: flex;
+            gap: 8px;
+            flex-wrap: wrap;
+        }
+
+        /* Terminal Output */
+        .terminal-container {
+            padding: 16px;
+        }
+
+        .terminal {
+            background: var(--bg-tertiary);
+            border-radius: 8px;
+            padding: 16px;
+            font-family: 'Consolas', 'Monaco', 'Courier New', monospace;
+            font-size: 13px;
+            line-height: 1.5;
+            height: 500px;
+            overflow-y: auto;
+            white-space: pre-wrap;
+            word-wrap: break-word;
+            color: #c8c8c8;
+        }
+
+        .terminal::-webkit-scrollbar {
+            width: 8px;
+        }
+
+        .terminal::-webkit-scrollbar-track {
+            background: var(--bg-tertiary);
+        }
+
+        .terminal::-webkit-scrollbar-thumb {
+            background: var(--border);
+            border-radius: 4px;
+        }
+
+        /* Command Input */
+        .command-input-container {
+            display: flex;
+            gap: 8px;
+            padding: 16px 20px;
+            background: var(--bg-tertiary);
+            border-top: 1px solid var(--border);
+        }
+
+        .command-input {
+            flex: 1;
+            padding: 12px 16px;
+            background: var(--bg-primary);
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            color: var(--text-primary);
+            font-family: 'Consolas', 'Monaco', monospace;
+            font-size: 0.875rem;
+        }
+
+        .command-input:focus {
+            outline: none;
+            border-color: var(--accent);
+        }
+
+        /* Quick Actions */
+        .quick-actions {
+            padding: 12px 20px;
+            background: rgba(0,0,0,0.2);
+            display: flex;
+            gap: 8px;
+            flex-wrap: wrap;
+            align-items: center;
+        }
+
+        .quick-actions-label {
+            font-size: 0.75rem;
+            color: var(--text-secondary);
+            margin-right: 8px;
+        }
+
+        /* Modal */
+        .modal-overlay {
+            display: none;
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: rgba(0,0,0,0.7);
+            z-index: 1000;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .modal-overlay.active {
+            display: flex;
+        }
+
+        .modal {
+            background: var(--bg-secondary);
+            border-radius: 12px;
+            padding: 24px;
+            width: 100%;
+            max-width: 500px;
+            box-shadow: 0 20px 60px rgba(0,0,0,0.4);
+        }
+
+        .modal h2 {
+            margin-bottom: 20px;
+            font-size: 1.25rem;
+        }
+
+        .form-group {
+            margin-bottom: 16px;
+        }
+
+        .form-group label {
+            display: block;
+            margin-bottom: 6px;
+            font-size: 0.875rem;
+            color: var(--text-secondary);
+        }
+
+        .form-group input {
+            width: 100%;
+            padding: 10px 14px;
+            background: var(--bg-primary);
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            color: var(--text-primary);
+            font-size: 0.875rem;
+        }
+
+        .form-group input:focus {
+            outline: none;
+            border-color: var(--accent);
+        }
+
+        .modal-actions {
+            display: flex;
+            justify-content: flex-end;
+            gap: 12px;
+            margin-top: 24px;
+        }
+
+        /* Empty State */
+        .empty-state {
+            text-align: center;
+            padding: 60px 20px;
+            color: var(--text-secondary);
+        }
+
+        .empty-state h2 {
+            margin-bottom: 12px;
+            color: var(--text-primary);
+        }
+
+        /* Toast */
+        .toast-container {
+            position: fixed;
+            bottom: 20px;
+            right: 20px;
+            z-index: 1001;
+        }
+
+        .toast {
+            background: var(--bg-secondary);
+            border: 1px solid var(--border);
+            padding: 12px 20px;
+            border-radius: 8px;
+            margin-top: 8px;
+            animation: slideIn 0.3s ease;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+        }
+
+        .toast.error {
+            border-color: var(--danger);
+        }
+
+        .toast.success {
+            border-color: var(--accent);
+        }
+
+        @keyframes slideIn {
+            from {
+                transform: translateX(100%);
+                opacity: 0;
+            }
+            to {
+                transform: translateX(0);
+                opacity: 1;
+            }
+        }
+
+        .debug-info {
+            font-size: 0.7rem;
+            color: var(--text-secondary);
+            margin-left: auto;
+            padding: 4px 8px;
+            background: var(--bg-tertiary);
+            border-radius: 4px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>Tmux Control Panel</h1>
+            <div class="header-actions">
+                <span class="debug-info" id="debug-info">Ready</span>
+                <button class="btn-secondary" onclick="refreshAll()">↻ Refresh</button>
+                <button class="btn-primary" onclick="showNewSessionModal()">+ New Session</button>
+            </div>
+        </header>
+
+        <div class="tabs-container" id="tabs-container">
+            <!-- Tabs will be added here dynamically -->
+        </div>
+
+        <div id="sessions-container">
+            <div class="empty-state" id="empty-state">
+                <h2>No Sessions</h2>
+                <p>Create a new session to get started</p>
+            </div>
+        </div>
+    </div>
+
+    <!-- New Session Modal -->
+    <div class="modal-overlay" id="new-session-modal">
+        <div class="modal">
+            <h2>Create New Session</h2>
+            <div class="form-group">
+                <label for="session-name">Session Name</label>
+                <input type="text" id="session-name" placeholder="my-session" autocomplete="off">
+            </div>
+            <div class="form-group">
+                <label for="working-dir">Working Directory (optional)</label>
+                <input type="text" id="working-dir" placeholder="/home/user/project">
+            </div>
+            <div class="form-group">
+                <label for="initial-command">Initial Command (optional)</label>
+                <input type="text" id="initial-command" placeholder="npm run dev">
+            </div>
+            <div class="modal-actions">
+                <button class="btn-secondary" onclick="hideNewSessionModal()">Cancel</button>
+                <button class="btn-primary" onclick="createSession()">Create</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Command Buttons Modal -->
+    <div class="modal-overlay" id="command-modal">
+        <div class="modal">
+            <h2>Add Quick Command</h2>
+            <div class="form-group">
+                <label for="cmd-label">Button Label</label>
+                <input type="text" id="cmd-label" placeholder="Build" autocomplete="off">
+            </div>
+            <div class="form-group">
+                <label for="cmd-command">Command</label>
+                <input type="text" id="cmd-command" placeholder="npm run build">
+            </div>
+            <div class="modal-actions">
+                <button class="btn-secondary" onclick="hideCommandModal()">Cancel</button>
+                <button class="btn-primary" onclick="addQuickCommand()">Add</button>
+            </div>
+        </div>
+    </div>
+
+    <div class="toast-container" id="toast-container"></div>
+
+    <script>
+        const API_BASE = '';
+        let sessions = [];
+        let activeSession = null;
+        let refreshIntervals = {};
+        let customCommands = {};  // Loaded from server
+        let autoScroll = {};  // Track auto-scroll per session
+
+        // Default quick commands
+        const defaultCommands = [
+            { label: '⏹ Stop', command: null, signal: 'INT' },
+            { label: '⏸ Suspend', command: null, signal: 'STOP' },
+            { label: '🔄 Clear', command: 'clear' },
+        ];
+
+        function updateDebug(msg) {
+            document.getElementById('debug-info').textContent = msg;
+        }
+
+        // Initialize
+        document.addEventListener('DOMContentLoaded', async () => {
+            await loadCommands();  // Load commands from server first
+            loadSessions();
+            
+            // Handle Enter key in inputs
+            document.getElementById('session-name').addEventListener('keypress', (e) => {
+                if (e.key === 'Enter') createSession();
+            });
+        });
+
+        async function loadCommands() {
+            try {
+                const response = await fetch(`${API_BASE}/api/commands`);
+                const data = await response.json();
+                if (data.success) {
+                    customCommands = data.commands;
+                }
+            } catch (error) {
+                console.error('Failed to load commands:', error);
+                customCommands = {};
+            }
+        }
+
+        async function loadSessions() {
+            try {
+                updateDebug('Loading sessions...');
+                const response = await fetch(`${API_BASE}/api/sessions`);
+                const data = await response.json();
+                
+                if (data.success) {
+                    sessions = data.sessions;
+                    renderTabs();
+                    renderPanels();
+                    
+                    // Activate first session if none active
+                    if (sessions.length > 0 && !activeSession) {
+                        activateSession(sessions[0].name);
+                    }
+                    
+                    document.getElementById('empty-state').style.display = 
+                        sessions.length === 0 ? 'block' : 'none';
+                    
+                    updateDebug(`${sessions.length} session(s)`);
+                }
+            } catch (error) {
+                updateDebug('Error: ' + error.message);
+                showToast('Failed to load sessions', 'error');
+            }
+        }
+
+        function renderTabs() {
+            const container = document.getElementById('tabs-container');
+            container.innerHTML = sessions.map(session => `
+                <button class="tab ${session.name === activeSession ? 'active' : ''}" 
+                        onclick="activateSession('${session.name}')">
+                    <span>${session.display_name}</span>
+                    <span class="close-tab" onclick="event.stopPropagation(); destroySession('${session.name}')">×</span>
+                </button>
+            `).join('');
+        }
+
+        function renderPanels() {
+            const container = document.getElementById('sessions-container');
+            const existingPanels = container.querySelectorAll('.session-panel');
+            
+            // Remove panels for sessions that no longer exist
+            existingPanels.forEach(panel => {
+                const name = panel.dataset.session;
+                if (!sessions.find(s => s.name === name)) {
+                    panel.remove();
+                    if (refreshIntervals[name]) {
+                        clearInterval(refreshIntervals[name]);
+                        delete refreshIntervals[name];
+                    }
+                }
+            });
+
+            // Add panels for new sessions
+            sessions.forEach(session => {
+                if (!container.querySelector(`[data-session="${session.name}"]`)) {
+                    const panel = createPanelElement(session);
+                    container.appendChild(panel);
+                    autoScroll[session.name] = true;  // Enable auto-scroll for new sessions
+                    startRefreshing(session.name);
+                }
+            });
+
+            // Update active states
+            container.querySelectorAll('.session-panel').forEach(panel => {
+                panel.classList.toggle('active', panel.dataset.session === activeSession);
+            });
+        }
+
+        function createPanelElement(session) {
+            const panel = document.createElement('div');
+            panel.className = 'session-panel';
+            panel.dataset.session = session.name;
+            
+            const commands = customCommands[session.name] || [];
+            
+            panel.innerHTML = `
+                <div class="panel-header">
+                    <div class="panel-info">
+                        <div class="status-indicator"></div>
+                        <strong>${session.display_name}</strong>
+                    </div>
+                    <div class="panel-actions">
+                        ${defaultCommands.map(cmd => 
+                            cmd.signal 
+                                ? `<button class="btn-secondary btn-small" onclick="sendSignal('${session.name}', '${cmd.signal}')">${cmd.label}</button>`
+                                : `<button class="btn-secondary btn-small" onclick="runCommand('${session.name}', '${cmd.command}')">${cmd.label}</button>`
+                        ).join('')}
+                        <button class="btn-danger btn-small" onclick="destroySession('${session.name}')">✕ Close</button>
+                    </div>
+                </div>
+                <div class="quick-actions" id="quick-actions-${session.name}">
+                    <span class="quick-actions-label">Quick Commands:</span>
+                    ${commands.map((cmd, i) => 
+                        `<button class="btn-secondary btn-small" onclick="runCommand('${session.name}', '${cmd.command.replace(/'/g, "\\'")}')">${cmd.label}</button><button class="btn-secondary btn-small" style="padding:6px 6px;margin-left:-4px;opacity:0.6" onclick="deleteQuickCommand('${session.name}', ${i})" title="Delete">×</button>`
+                    ).join('')}
+                    <button class="btn-secondary btn-small" onclick="showCommandModal('${session.name}')">+ Add</button>
+                </div>
+                <div class="terminal-container">
+                    <div class="terminal" id="terminal-${session.name}" onscroll="handleTerminalScroll('${session.name}')">Loading...</div>
+                </div>
+                <div class="command-input-container">
+                    <input type="text" class="command-input" 
+                           id="input-${session.name}" 
+                           placeholder="Enter command..."
+                           onkeypress="handleInputKeypress(event, '${session.name}')">
+                    <button class="btn-primary" onclick="sendInput('${session.name}')">Send</button>
+                </div>
+            `;
+            
+            return panel;
+        }
+
+        function handleTerminalScroll(sessionName) {
+            const terminal = document.getElementById(`terminal-${sessionName}`);
+            if (terminal) {
+                // Check if user scrolled away from bottom
+                const isAtBottom = terminal.scrollHeight - terminal.scrollTop <= terminal.clientHeight + 50;
+                autoScroll[sessionName] = isAtBottom;
+            }
+        }
+
+        function activateSession(name) {
+            activeSession = name;
+            renderTabs();
+            
+            document.querySelectorAll('.session-panel').forEach(panel => {
+                panel.classList.toggle('active', panel.dataset.session === name);
+            });
+            
+            // Refresh output immediately
+            refreshOutput(name);
+            
+            // Focus input
+            setTimeout(() => {
+                const input = document.getElementById(`input-${name}`);
+                if (input) input.focus();
+            }, 100);
+        }
+
+        function startRefreshing(sessionName) {
+            if (refreshIntervals[sessionName]) return;
+            
+            refreshOutput(sessionName);
+            refreshIntervals[sessionName] = setInterval(() => {
+                refreshOutput(sessionName);
+            }, 500);  // Refresh every 500ms for more responsive feel
+        }
+
+        async function refreshOutput(sessionName) {
+            try {
+                const response = await fetch(`${API_BASE}/api/sessions/${sessionName}/output?lines=500`);
+                const data = await response.json();
+                
+                if (data.success) {
+                    const terminal = document.getElementById(`terminal-${sessionName}`);
+                    if (terminal) {
+                        const previousContent = terminal.textContent;
+                        const newContent = data.output;
+                        
+                        // Only update if content changed
+                        if (previousContent !== newContent) {
+                            terminal.textContent = newContent;
+                            
+                            // Auto-scroll to bottom if enabled
+                            if (autoScroll[sessionName]) {
+                                terminal.scrollTop = terminal.scrollHeight;
+                            }
+                        }
+                    }
+                }
+            } catch (error) {
+                console.error('Failed to refresh output:', error);
+            }
+        }
+
+        async function createSession() {
+            const name = document.getElementById('session-name').value.trim();
+            const workingDir = document.getElementById('working-dir').value.trim();
+            const initialCommand = document.getElementById('initial-command').value.trim();
+            
+            if (!name) {
+                showToast('Please enter a session name', 'error');
+                return;
+            }
+            
+            try {
+                updateDebug('Creating session...');
+                const response = await fetch(`${API_BASE}/api/sessions`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        name,
+                        working_dir: workingDir || undefined,
+                        initial_command: initialCommand || undefined
+                    })
+                });
+                
+                const data = await response.json();
+                
+                if (data.success) {
+                    hideNewSessionModal();
+                    await loadSessions();
+                    activateSession(data.session);
+                    showToast('Session created', 'success');
+                } else {
+                    showToast(data.error, 'error');
+                }
+            } catch (error) {
+                showToast('Failed to create session', 'error');
+            }
+        }
+
+        async function destroySession(sessionName) {
+            if (!confirm(`Destroy session "${sessionName.replace('cp-', '')}"?`)) return;
+            
+            try {
+                const response = await fetch(`${API_BASE}/api/sessions/${sessionName}`, {
+                    method: 'DELETE'
+                });
+                
+                const data = await response.json();
+                
+                if (data.success) {
+                    if (refreshIntervals[sessionName]) {
+                        clearInterval(refreshIntervals[sessionName]);
+                        delete refreshIntervals[sessionName];
+                    }
+                    
+                    if (activeSession === sessionName) {
+                        activeSession = null;
+                    }
+                    
+                    await loadSessions();
+                    showToast('Session destroyed', 'success');
+                } else {
+                    showToast(data.error, 'error');
+                }
+            } catch (error) {
+                showToast('Failed to destroy session', 'error');
+            }
+        }
+
+        async function sendInput(sessionName) {
+            const input = document.getElementById(`input-${sessionName}`);
+            const command = input.value;
+            
+            if (!command) return;
+            
+            try {
+                updateDebug(`Sending: ${command}`);
+                const response = await fetch(`${API_BASE}/api/sessions/${sessionName}/send`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ keys: command, enter: true })
+                });
+                
+                const data = await response.json();
+                
+                if (data.success) {
+                    input.value = '';
+                    autoScroll[sessionName] = true;  // Re-enable auto-scroll after sending command
+                    // Immediate refresh
+                    setTimeout(() => refreshOutput(sessionName), 100);
+                    setTimeout(() => refreshOutput(sessionName), 300);
+                    setTimeout(() => refreshOutput(sessionName), 600);
+                    updateDebug('Command sent');
+                } else {
+                    showToast(data.error, 'error');
+                    updateDebug('Error: ' + data.error);
+                }
+            } catch (error) {
+                showToast('Failed to send command', 'error');
+                updateDebug('Error: ' + error.message);
+            }
+        }
+
+        async function runCommand(sessionName, command) {
+            try {
+                updateDebug(`Running: ${command}`);
+                const response = await fetch(`${API_BASE}/api/sessions/${sessionName}/command`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ command })
+                });
+                
+                const data = await response.json();
+                
+                if (!data.success) {
+                    showToast(data.error, 'error');
+                } else {
+                    autoScroll[sessionName] = true;
+                    setTimeout(() => refreshOutput(sessionName), 100);
+                    setTimeout(() => refreshOutput(sessionName), 300);
+                    updateDebug('Command sent');
+                }
+            } catch (error) {
+                showToast('Failed to run command', 'error');
+            }
+        }
+
+        async function sendSignal(sessionName, signal) {
+            try {
+                updateDebug(`Sending signal: ${signal}`);
+                const response = await fetch(`${API_BASE}/api/sessions/${sessionName}/signal`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ signal })
+                });
+                
+                const data = await response.json();
+                
+                if (!data.success) {
+                    showToast(data.error, 'error');
+                } else {
+                    autoScroll[sessionName] = true;
+                    setTimeout(() => refreshOutput(sessionName), 100);
+                    setTimeout(() => refreshOutput(sessionName), 300);
+                    updateDebug('Signal sent');
+                }
+            } catch (error) {
+                showToast('Failed to send signal', 'error');
+            }
+        }
+
+        function handleInputKeypress(event, sessionName) {
+            if (event.key === 'Enter') {
+                sendInput(sessionName);
+            }
+        }
+
+        // Modal functions
+        function showNewSessionModal() {
+            document.getElementById('session-name').value = '';
+            document.getElementById('working-dir').value = '';
+            document.getElementById('initial-command').value = '';
+            document.getElementById('new-session-modal').classList.add('active');
+            document.getElementById('session-name').focus();
+        }
+
+        function hideNewSessionModal() {
+            document.getElementById('new-session-modal').classList.remove('active');
+        }
+
+        let commandModalSession = null;
+
+        function showCommandModal(sessionName) {
+            commandModalSession = sessionName;
+            document.getElementById('cmd-label').value = '';
+            document.getElementById('cmd-command').value = '';
+            document.getElementById('command-modal').classList.add('active');
+            document.getElementById('cmd-label').focus();
+        }
+
+        function hideCommandModal() {
+            document.getElementById('command-modal').classList.remove('active');
+            commandModalSession = null;
+        }
+
+        async function addQuickCommand() {
+            const label = document.getElementById('cmd-label').value.trim();
+            const command = document.getElementById('cmd-command').value.trim();
+            
+            if (!label || !command) {
+                showToast('Please fill in all fields', 'error');
+                return;
+            }
+            
+            try {
+                const response = await fetch(`${API_BASE}/api/commands/${commandModalSession}`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ label, command })
+                });
+                
+                const data = await response.json();
+                
+                if (data.success) {
+                    customCommands[commandModalSession] = data.commands;
+                    updateQuickActionsBar(commandModalSession);
+                    hideCommandModal();
+                    showToast('Command added', 'success');
+                } else {
+                    showToast(data.error, 'error');
+                }
+            } catch (error) {
+                showToast('Failed to add command', 'error');
+            }
+        }
+
+        async function deleteQuickCommand(sessionName, index) {
+            if (!confirm('Delete this quick command?')) return;
+            
+            try {
+                const response = await fetch(`${API_BASE}/api/commands/${sessionName}/${index}`, {
+                    method: 'DELETE'
+                });
+                
+                const data = await response.json();
+                
+                if (data.success) {
+                    customCommands[sessionName] = data.commands;
+                    updateQuickActionsBar(sessionName);
+                    showToast('Command deleted', 'success');
+                } else {
+                    showToast(data.error, 'error');
+                }
+            } catch (error) {
+                showToast('Failed to delete command', 'error');
+            }
+        }
+
+        function updateQuickActionsBar(sessionName) {
+            const quickActionsBar = document.getElementById(`quick-actions-${sessionName}`);
+            if (quickActionsBar) {
+                const commands = customCommands[sessionName] || [];
+                quickActionsBar.innerHTML = `
+                    <span class="quick-actions-label">Quick Commands:</span>
+                    ${commands.map((cmd, i) => 
+                        `<button class="btn-secondary btn-small" onclick="runCommand('${sessionName}', '${cmd.command.replace(/'/g, "\\'")}')">${cmd.label}</button><button class="btn-secondary btn-small" style="padding:6px 6px;margin-left:-4px;opacity:0.6" onclick="deleteQuickCommand('${sessionName}', ${i})" title="Delete">×</button>`
+                    ).join('')}
+                    <button class="btn-secondary btn-small" onclick="showCommandModal('${sessionName}')">+ Add</button>
+                `;
+            }
+        }
+
+        function refreshAll() {
+            loadCommands().then(() => loadSessions());
+        }
+
+        function showToast(message, type = 'info') {
+            const container = document.getElementById('toast-container');
+            const toast = document.createElement('div');
+            toast.className = `toast ${type}`;
+            toast.textContent = message;
+            container.appendChild(toast);
+            
+            setTimeout(() => {
+                toast.remove();
+            }, 3000);
+        }
+
+        // Close modals on outside click
+        document.querySelectorAll('.modal-overlay').forEach(overlay => {
+            overlay.addEventListener('click', (e) => {
+                if (e.target === overlay) {
+                    overlay.classList.remove('active');
+                }
+            });
+        });
+
+        // Keyboard shortcuts
+        document.addEventListener('keydown', (e) => {
+            if (e.key === 'Escape') {
+                document.querySelectorAll('.modal-overlay').forEach(m => m.classList.remove('active'));
+            }
+            
+            // Ctrl+T for new session
+            if (e.ctrlKey && e.key === 't') {
+                e.preventDefault();
+                showNewSessionModal();
+            }
+        });
+    </script>
+</body>
+</html>
