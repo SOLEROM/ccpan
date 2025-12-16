@@ -527,7 +527,7 @@
         function startRefreshing(sessionName) {
             if (refreshIntervals[sessionName]) return;
             refreshTerminal(sessionName);
-            refreshIntervals[sessionName] = setInterval(() => refreshTerminal(sessionName), 250);
+            refreshIntervals[sessionName] = setInterval(() => refreshTerminal(sessionName), 100);  // 100ms for smooth cursor
         }
 
         async function refreshTerminal(sessionName) {
@@ -539,25 +539,22 @@
                     const term = terminals[sessionName];
                     const content = data.content || '';
                     
-                    // Only update if content changed
-                    if (lastContent[sessionName] !== content) {
+                    // Check if content changed (redraw needed)
+                    const contentChanged = lastContent[sessionName] !== content;
+                    
+                    if (contentChanged) {
                         lastContent[sessionName] = content;
                         
-                        // Hide cursor, go home, clear screen
+                        // Hide cursor, go home, clear screen, write content
                         term.write('\x1b[?25l\x1b[H\x1b[2J');
-                        
-                        // Write the content
                         term.write(content);
-                        
-                        // Position cursor where tmux says it should be
-                        // tmux cursor_y is 0-based, ANSI is 1-based
-                        const row = (data.cursor_y || 0) + 1;
-                        const col = (data.cursor_x || 0) + 1;
-                        term.write(`\x1b[${row};${col}H`);
-                        
-                        // Show cursor
-                        term.write('\x1b[?25h');
                     }
+                    
+                    // ALWAYS update cursor position
+                    const row = (data.cursor_y || 0) + 1;
+                    const col = (data.cursor_x || 0) + 1;
+                    term.write(`\x1b[${row};${col}H`);
+                    term.write('\x1b[?25h');  // Show cursor
                 }
             } catch (error) {
                 console.error('Refresh error:', error);
