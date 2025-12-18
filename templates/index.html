@@ -487,6 +487,7 @@
         let currentSession = null;
         let sessions = [];
         let customCommands = {};
+        let inCopyMode = false;  // Track if we're in tmux copy-mode
         
         // ========================================================================
         // WebSocket Connection
@@ -524,14 +525,27 @@
             
             socket.on('subscribed', (data) => {
                 console.log('Subscribed to session:', data.session);
+                
+                // Clear terminal for fresh start
+                if (term) {
+                    term.clear();
+                    term.reset();
+                }
+                
+                // Request a resize to force tmux to redraw cleanly
+                setTimeout(() => {
+                    if (socket && socket.connected && term) {
+                        socket.emit('resize', {
+                            session: data.session,
+                            cols: term.cols,
+                            rows: term.rows
+                        });
+                    }
+                }, 100);
             });
             
             socket.on('output', (data) => {
                 if (term && data.session === currentSession) {
-                    if (data.initial) {
-                        // Initial content - clear and write
-                        term.clear();
-                    }
                     term.write(data.data);
                 }
             });
@@ -610,6 +624,11 @@
             // Handle keyboard input - send via WebSocket
             term.onData((data) => {
                 if (currentSession && socket && socket.connected) {
+                    // If in copy-mode, exit it first when user types
+                    if (inCopyMode) {
+                        socket.emit('scroll', { session: currentSession, command: 'exit' });
+                        inCopyMode = false;
+                    }
                     socket.emit('input', {
                         session: currentSession,
                         keys: data
@@ -642,7 +661,6 @@
             term.clear();
             
             // Disable mouse reporting in xterm.js core
-            // This prevents wheel events from being sent as escape sequences
             if (term._core && term._core._coreMouseService) {
                 term._core._coreMouseService.activeProtocol = 'NONE';
             }
@@ -655,17 +673,36 @@
                 fitAddon.fit();
                 term.focus();
                 
-                // Get the viewport element - this is what actually scrolls
-                const xtermViewport = container.querySelector('.xterm-viewport');
-                
-                // Override wheel event on the terminal container
+                // Handle mouse wheel - use tmux's copy-mode for scrollback
                 container.addEventListener('wheel', function(e) {
                     e.preventDefault();
                     e.stopPropagation();
                     
-                    if (xtermViewport) {
-                        // Scroll the viewport directly
-                        xtermViewport.scrollTop += e.deltaY;
+                    if (!currentSession || !socket || !socket.connected) {
+                        return false;
+                    }
+                    
+                    const scrollUp = e.deltaY < 0;
+                    const lines = Math.max(1, Math.abs(Math.round(e.deltaY / 30)));
+                    
+                    if (scrollUp) {
+                        if (!inCopyMode) {
+                            // Enter tmux copy-mode
+                            socket.emit('scroll', { session: currentSession, command: 'enter' });
+                            inCopyMode = true;
+                            // Small delay then scroll
+                            setTimeout(() => {
+                                socket.emit('scroll', { session: currentSession, command: 'up', lines: lines });
+                            }, 50);
+                        } else {
+                            // Scroll up in copy-mode
+                            socket.emit('scroll', { session: currentSession, command: 'up', lines: lines });
+                        }
+                    } else {
+                        if (inCopyMode) {
+                            // Scroll down in copy-mode
+                            socket.emit('scroll', { session: currentSession, command: 'down', lines: lines });
+                        }
                     }
                     
                     return false;
@@ -731,13 +768,8 @@
             document.getElementById('terminalPanel').style.display = 'flex';
             document.getElementById('terminalTitle').textContent = session;
             
-            // Attach terminal
+            // Attach terminal first
             attachTerminal(session);
-            
-            // Subscribe to session output
-            if (socket && socket.connected) {
-                socket.emit('subscribe', { session: session });
-            }
             
             // Update session list highlight
             renderSessionList();
@@ -745,17 +777,24 @@
             // Render quick commands
             renderQuickCommands();
             
-            // Send initial resize
+            // Fit terminal, get size, THEN subscribe with correct dimensions
             setTimeout(() => {
                 fitAddon.fit();
+                
+                const cols = term.cols;
+                const rows = term.rows;
+                
+                console.log(`Terminal size: ${cols}x${rows}`);
+                
+                // Subscribe with correct size
                 if (socket && socket.connected) {
-                    socket.emit('resize', {
+                    socket.emit('subscribe', { 
                         session: session,
-                        cols: term.cols,
-                        rows: term.rows
+                        cols: cols,
+                        rows: rows
                     });
                 }
-            }, 100);
+            }, 150);
         }
         
         async function createSession() {
