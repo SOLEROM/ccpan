@@ -466,7 +466,16 @@
                         <p style="margin: 0 0 8px 0;"><strong>VS Code:</strong> <code>code --disable-gpu --ozone-platform=x11 . &</code></p>
                         <p style="margin: 0 0 8px 0;"><strong>Firefox:</strong> <code>firefox --display=$DISPLAY &</code></p>
                         <p style="margin: 0 0 8px 0;"><strong>Chrome:</strong> <code>google-chrome --disable-gpu --no-sandbox &</code></p>
-                        <p style="margin: 0; padding: 8px; background: #1a1e24; border-radius: 4px;">
+                        
+                        <div style="margin-top: 10px; padding: 8px; background: #1a1e24; border-radius: 4px; border-left: 3px solid #58a6ff;">
+                            <strong>🎮 3D/OpenGL apps:</strong><br>
+                            Software rendering is enabled (slow but works). For better performance with 3D apps like FlightGear:<br>
+                            <code style="display: block; margin-top: 4px;">sudo apt install virtualgl</code>
+                            Then run: <code>vglrun fgfs &</code><br>
+                            <small style="color: #6e7681;">Or use: <code>LIBGL_ALWAYS_SOFTWARE=1 fgfs &</code> for software rendering</small>
+                        </div>
+                        
+                        <p style="margin: 10px 0 0 0; padding: 8px; background: #1a1e24; border-radius: 4px;">
                             <strong>⚠️ Note:</strong> If app opens on your main screen instead, start a <strong>new terminal tab</strong> in your session 
                             (the DISPLAY variable is set when GUI is enabled). Or manually run: <code>export DISPLAY=<span id="currentDisplay">:99</span></code>
                         </p>
@@ -1328,6 +1337,32 @@
         let sessionDisplayInfo = null;
         let sessionRfbConnection = null;
         
+        let x11Available = null; // null = unknown, true/false = checked
+        
+        async function checkX11Available() {
+            try {
+                const response = await fetch('/api/x11/check');
+                const data = await response.json();
+                x11Available = (data.status === 'ok');
+                updateGuiButtonAvailability();
+            } catch (error) {
+                x11Available = false;
+            }
+        }
+        
+        function updateGuiButtonAvailability() {
+            const btn = document.getElementById('guiToggleBtn');
+            if (!btn) return;
+            
+            if (x11Available === false) {
+                btn.title = 'GUI requires: sudo apt install xvfb x11vnc websockify';
+                btn.style.opacity = '0.6';
+            } else {
+                btn.title = 'Enable GUI apps in this session';
+                btn.style.opacity = '1';
+            }
+        }
+        
         async function checkSessionDisplay() {
             if (!currentSession) return;
             
@@ -1393,7 +1428,19 @@
                 const data = await response.json();
                 
                 if (data.status === 'error') {
-                    alert('Failed to enable GUI: ' + data.message);
+                    // Check if it's a missing dependencies error
+                    if (data.message && data.message.includes('Missing dependencies')) {
+                        const installCmd = 'sudo apt install xvfb x11vnc websockify';
+                        if (confirm(`GUI requires X11 packages to be installed.\n\n${data.message}\n\nInstall command:\n${installCmd}\n\nCopy install command to clipboard?`)) {
+                            navigator.clipboard.writeText(installCmd).then(() => {
+                                alert('Command copied! Run it in your server terminal, then try again.');
+                            }).catch(() => {
+                                alert(`Please run this command on your server:\n\n${installCmd}`);
+                            });
+                        }
+                    } else {
+                        alert('Failed to enable GUI: ' + data.message);
+                    }
                     return;
                 }
                 
@@ -1518,6 +1565,7 @@
             initTerminal();
             connectWebSocket();
             refreshX11Apps();
+            checkX11Available();
         });
     </script>
 </body>

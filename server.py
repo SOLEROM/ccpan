@@ -591,6 +591,22 @@ def check_x11_dependencies():
     return missing
 
 
+def check_virtualgl():
+    """Check if VirtualGL is installed."""
+    return shutil.which('vglrun') is not None
+
+
+def check_software_gl():
+    """Check if software OpenGL (Mesa LLVMpipe) can be used."""
+    # Check for Mesa drivers
+    llvmpipe_paths = [
+        '/usr/lib/x86_64-linux-gnu/dri/swrast_dri.so',
+        '/usr/lib64/dri/swrast_dri.so',
+        '/usr/lib/dri/swrast_dri.so'
+    ]
+    return any(os.path.exists(p) for p in llvmpipe_paths)
+
+
 def start_x11_app(app_command, width=400, height=400, app_id=None):
     """
     Start an X11 application in a virtual framebuffer.
@@ -892,9 +908,16 @@ def start_session_display(session_name, width=800, height=600):
         run_tmux("set-environment", "-t", full_name, "GDK_BACKEND", "x11")
         run_tmux("set-environment", "-t", full_name, "QT_QPA_PLATFORM", "xcb")
         
+        # Enable software OpenGL rendering (Mesa LLVMpipe)
+        run_tmux("set-environment", "-t", full_name, "LIBGL_ALWAYS_SOFTWARE", "1")
+        run_tmux("set-environment", "-t", full_name, "GALLIUM_DRIVER", "llvmpipe")
+        run_tmux("set-environment", "-t", full_name, "MESA_GL_VERSION_OVERRIDE", "3.3")
+        
+        # Check for VirtualGL
+        has_vgl = check_virtualgl()
+        
         # Send commands to set up the environment in the shell
-        # Using a single compound command to ensure it all runs
-        env_setup = f"export DISPLAY={display} && unset WAYLAND_DISPLAY && export GDK_BACKEND=x11 && export QT_QPA_PLATFORM=xcb"
+        env_setup = f"export DISPLAY={display} && unset WAYLAND_DISPLAY && export GDK_BACKEND=x11 && export QT_QPA_PLATFORM=xcb && export LIBGL_ALWAYS_SOFTWARE=1 && export GALLIUM_DRIVER=llvmpipe && export MESA_GL_VERSION_OVERRIDE=3.3"
         run_tmux("send-keys", "-t", full_name, env_setup, "Enter")
         
         # Store display info
@@ -907,7 +930,8 @@ def start_session_display(session_name, width=800, height=600):
             'ws_pid': ws_proc.pid,
             'ws_port': ws_port,
             'width': width,
-            'height': height
+            'height': height,
+            'has_virtualgl': has_vgl
         }
         
         return {
@@ -915,7 +939,9 @@ def start_session_display(session_name, width=800, height=600):
             'display': display,
             'ws_port': ws_port,
             'width': width,
-            'height': height
+            'height': height,
+            'has_virtualgl': has_vgl,
+            'software_gl': True
         }, None
         
     except Exception as e:

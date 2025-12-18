@@ -5,6 +5,8 @@ set -e
 
 echo "🖥️  Setting up Tmux Control Panel v3..."
 
+sudo apt install xvfb x11vnc websockify
+
 # Check for Python
 if ! command -v python3 &> /dev/null; then
     echo "❌ Python 3 is required but not installed."
