@@ -206,6 +206,6 @@ marimo/_static/
 marimo/_lsp/
 __marimo__/
 
-# venvs
-venv
+# my
 commands.json
+venv

@@ -220,11 +220,30 @@
             padding: 4px;
             background: #0a0a0a;
             position: relative;
+            overflow: hidden;
         }
         
         #terminal {
             width: 100%;
             height: 100%;
+        }
+        
+        /* Custom scrollbar for xterm */
+        .xterm-viewport::-webkit-scrollbar {
+            width: 10px;
+        }
+        
+        .xterm-viewport::-webkit-scrollbar-track {
+            background: #1a1a2e;
+        }
+        
+        .xterm-viewport::-webkit-scrollbar-thumb {
+            background: #4a4a6a;
+            border-radius: 5px;
+        }
+        
+        .xterm-viewport::-webkit-scrollbar-thumb:hover {
+            background: #6a6a8a;
         }
         
         .quick-commands {
@@ -556,7 +575,7 @@
                 cursorStyle: 'block',
                 fontSize: 14,
                 fontFamily: '"JetBrains Mono", "Fira Code", Consolas, "Courier New", monospace',
-                scrollback: 10000,
+                scrollback: 50000,
                 theme: {
                     background: '#0a0a0a',
                     foreground: '#c8c8c8',
@@ -622,11 +641,37 @@
             term.open(container);
             term.clear();
             
-            // Fit to container
+            // Disable mouse reporting in xterm.js core
+            // This prevents wheel events from being sent as escape sequences
+            if (term._core && term._core._coreMouseService) {
+                term._core._coreMouseService.activeProtocol = 'NONE';
+            }
+            if (term._core && term._core.mouseService) {
+                term._core.mouseService.activeProtocol = 'NONE';
+            }
+            
+            // Fit to container and setup scroll
             setTimeout(() => {
                 fitAddon.fit();
                 term.focus();
-            }, 0);
+                
+                // Get the viewport element - this is what actually scrolls
+                const xtermViewport = container.querySelector('.xterm-viewport');
+                
+                // Override wheel event on the terminal container
+                container.addEventListener('wheel', function(e) {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    
+                    if (xtermViewport) {
+                        // Scroll the viewport directly
+                        xtermViewport.scrollTop += e.deltaY;
+                    }
+                    
+                    return false;
+                }, { passive: false, capture: true });
+                
+            }, 100);
         }
         
         // ========================================================================

@@ -89,6 +89,9 @@ def create_tmux_session(name, cwd=None, initial_cmd=None):
     if result.returncode != 0:
         return False, result.stderr
     
+    # Disable mouse mode so scroll events stay in xterm.js
+    run_tmux("set-option", "-t", full_name, "mouse", "off")
+    
     if initial_cmd:
         time.sleep(0.1)
         run_tmux("send-keys", "-t", full_name, initial_cmd, "Enter")
@@ -114,6 +117,9 @@ def spawn_pty_for_session(session_name, cols=120, rows=40):
     """Spawn a PTY that attaches to a tmux session."""
     full_name = session_name if session_name.startswith(SESSION_PREFIX) else f"{SESSION_PREFIX}{session_name}"
     
+    # Ensure mouse is off for this session before attaching
+    run_tmux("set-option", "-t", full_name, "mouse", "off")
+    
     pid, master_fd = pty.fork()
     
     if pid == 0:
@@ -125,6 +131,19 @@ def spawn_pty_for_session(session_name, cols=120, rows=40):
         flags = fcntl.fcntl(master_fd, fcntl.F_GETFL)
         fcntl.fcntl(master_fd, fcntl.F_SETFL, flags | os.O_NONBLOCK)
         set_winsize(master_fd, rows, cols)
+        
+        # Send escape sequence to disable mouse tracking
+        # This disables various mouse modes that might be enabled
+        time.sleep(0.1)
+        try:
+            # Disable mouse tracking modes
+            os.write(master_fd, b'\x1b[?1000l')  # Disable mouse click tracking
+            os.write(master_fd, b'\x1b[?1002l')  # Disable mouse button tracking  
+            os.write(master_fd, b'\x1b[?1003l')  # Disable all mouse tracking
+            os.write(master_fd, b'\x1b[?1006l')  # Disable SGR mouse mode
+        except:
+            pass
+        
         return master_fd, pid
 
 
