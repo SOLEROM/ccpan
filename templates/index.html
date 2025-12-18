@@ -370,7 +370,7 @@
 </head>
 <body>
     <header>
-        <h1>🖥️ Tmux Control Panel v2</h1>
+        <h1>🖥️ Tmux Control Panel v3</h1>
         <div class="status-indicator">
             <span class="status-dot" id="statusDot"></span>
             <span id="statusText">Disconnected</span>
@@ -387,6 +387,17 @@
             </div>
             <div class="session-list" id="sessionList">
                 <!-- Sessions will be populated here -->
+            </div>
+            
+            <!-- X11 Apps Section -->
+            <div class="sidebar-header" style="margin-top: 20px; border-top: 1px solid #30363d; padding-top: 16px;">
+                <h2>🖼️ GUI Apps</h2>
+                <button class="btn btn-primary" style="width: 100%;" onclick="showX11Modal()">
+                    <span>+</span> Launch App
+                </button>
+            </div>
+            <div class="session-list" id="x11AppList">
+                <!-- X11 apps will be listed here -->
             </div>
         </aside>
         
@@ -426,6 +437,17 @@
                     <button class="btn btn-secondary btn-sm" onclick="showAddCommandModal()">
                         + Add
                     </button>
+                </div>
+            </div>
+            
+            <!-- X11 GUI Panel -->
+            <div id="x11Panel" style="display: none; border-top: 2px solid #30363d; background: #161b22; padding: 16px; margin-top: 10px;">
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
+                    <h3 style="margin: 0; color: #58a6ff;">🖼️ <span id="x11PanelTitle">GUI App</span></h3>
+                    <button class="btn btn-danger btn-sm" onclick="closeX11Panel()">✕ Close</button>
+                </div>
+                <div id="x11Container" style="width: 100%; display: flex; justify-content: center; background: #0d1117; border-radius: 6px; overflow: hidden;">
+                    <!-- noVNC canvas will be inserted here -->
                 </div>
             </div>
         </main>
@@ -475,6 +497,37 @@
             </div>
         </div>
     </div>
+    
+    <!-- X11 App Modal -->
+    <div class="modal-overlay" id="x11Modal">
+        <div class="modal">
+            <h3>🖼️ Launch GUI Application</h3>
+            <div id="x11DepsWarning" style="display: none; background: #3d1f1f; border: 1px solid #f85149; padding: 12px; border-radius: 6px; margin-bottom: 16px;">
+                <strong style="color: #f85149;">⚠️ Missing Dependencies</strong>
+                <p style="margin: 8px 0 0 0; color: #f0f0f0; font-size: 13px;" id="x11DepsMessage"></p>
+            </div>
+            <div class="form-group">
+                <label for="x11Command">Application Command</label>
+                <input type="text" id="x11Command" placeholder="xeyes" autocomplete="off">
+                <small>Examples: xeyes, xclock, xterm, firefox</small>
+            </div>
+            <div class="form-group">
+                <label>Window Size</label>
+                <div style="display: flex; gap: 10px;">
+                    <input type="number" id="x11Width" value="400" min="100" max="1920" style="flex: 1;">
+                    <span style="align-self: center;">×</span>
+                    <input type="number" id="x11Height" value="400" min="100" max="1080" style="flex: 1;">
+                </div>
+            </div>
+            <div class="modal-actions">
+                <button class="btn btn-secondary" onclick="hideX11Modal()">Cancel</button>
+                <button class="btn btn-primary" onclick="launchX11App()">Launch</button>
+            </div>
+        </div>
+    </div>
+    
+    <!-- noVNC scripts -->
+    <script src="https://cdn.jsdelivr.net/npm/@novnc/novnc@1.4.0/lib/rfb.js" type="module"></script>
 
     <script>
         // ========================================================================
@@ -1041,12 +1094,198 @@
         });
         
         // ========================================================================
+        // X11 GUI Apps
+        // ========================================================================
+        
+        let x11Apps = [];
+        let currentX11App = null;
+        let rfbConnection = null;
+        
+        async function checkX11Dependencies() {
+            try {
+                const response = await fetch('/api/x11/check');
+                const data = await response.json();
+                
+                const warning = document.getElementById('x11DepsWarning');
+                const message = document.getElementById('x11DepsMessage');
+                
+                if (data.status === 'missing') {
+                    warning.style.display = 'block';
+                    message.innerHTML = `Missing: ${data.missing.join(', ')}<br><code style="background: #21262d; padding: 4px 8px; border-radius: 4px; display: inline-block; margin-top: 8px;">${data.install_cmd}</code>`;
+                } else {
+                    warning.style.display = 'none';
+                }
+            } catch (error) {
+                console.error('Failed to check X11 dependencies:', error);
+            }
+        }
+        
+        function showX11Modal() {
+            checkX11Dependencies();
+            document.getElementById('x11Modal').classList.add('show');
+            document.getElementById('x11Command').focus();
+        }
+        
+        function hideX11Modal() {
+            document.getElementById('x11Modal').classList.remove('show');
+        }
+        
+        async function launchX11App() {
+            const command = document.getElementById('x11Command').value.trim();
+            const width = parseInt(document.getElementById('x11Width').value) || 400;
+            const height = parseInt(document.getElementById('x11Height').value) || 400;
+            
+            if (!command) {
+                alert('Please enter an application command');
+                return;
+            }
+            
+            try {
+                const response = await fetch('/api/x11/apps', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ command, width, height })
+                });
+                
+                const data = await response.json();
+                
+                if (data.status === 'error') {
+                    alert('Failed to launch app: ' + data.message);
+                    return;
+                }
+                
+                hideX11Modal();
+                await refreshX11Apps();
+                connectToX11App(data.app);
+                
+            } catch (error) {
+                console.error('Failed to launch X11 app:', error);
+                alert('Failed to launch X11 app');
+            }
+        }
+        
+        async function refreshX11Apps() {
+            try {
+                const response = await fetch('/api/x11/apps');
+                const data = await response.json();
+                x11Apps = data.apps || [];
+                renderX11AppList();
+            } catch (error) {
+                console.error('Failed to refresh X11 apps:', error);
+            }
+        }
+        
+        function renderX11AppList() {
+            const list = document.getElementById('x11AppList');
+            
+            if (x11Apps.length === 0) {
+                list.innerHTML = '<p style="padding: 16px; color: #8b949e; text-align: center; font-size: 13px;">No GUI apps running</p>';
+                return;
+            }
+            
+            list.innerHTML = x11Apps.map(app => `
+                <div class="session-item ${currentX11App === app.app_id ? 'active' : ''}" 
+                     onclick="connectToX11App(${JSON.stringify(app).replace(/"/g, '&quot;')})">
+                    <span class="session-name">🖼️ ${escapeHtml(app.command)}</span>
+                    <div class="session-actions">
+                        <button class="btn btn-danger btn-sm" onclick="event.stopPropagation(); stopX11App('${app.app_id}')">
+                            ×
+                        </button>
+                    </div>
+                </div>
+            `).join('');
+        }
+        
+        async function connectToX11App(app) {
+            currentX11App = app.app_id;
+            renderX11AppList();
+            
+            // Show X11 panel
+            document.getElementById('x11Panel').style.display = 'block';
+            document.getElementById('x11PanelTitle').textContent = app.command;
+            
+            const container = document.getElementById('x11Container');
+            container.innerHTML = '';
+            container.style.width = app.width + 'px';
+            container.style.height = app.height + 'px';
+            
+            // Disconnect existing connection
+            if (rfbConnection) {
+                rfbConnection.disconnect();
+                rfbConnection = null;
+            }
+            
+            // Connect via noVNC
+            try {
+                // Dynamic import for noVNC
+                const RFB = (await import('https://cdn.jsdelivr.net/npm/@novnc/novnc@1.4.0/core/rfb.js')).default;
+                
+                const wsUrl = `ws://${window.location.hostname}:${app.ws_port}`;
+                
+                rfbConnection = new RFB(container, wsUrl, {
+                    scaleViewport: false,
+                    resizeSession: false
+                });
+                
+                rfbConnection.addEventListener('connect', () => {
+                    console.log('Connected to VNC');
+                });
+                
+                rfbConnection.addEventListener('disconnect', (e) => {
+                    console.log('Disconnected from VNC:', e.detail);
+                });
+                
+                rfbConnection.addEventListener('credentialsrequired', () => {
+                    console.log('VNC credentials required');
+                });
+                
+            } catch (error) {
+                console.error('Failed to connect to X11 app:', error);
+                container.innerHTML = `<p style="color: #f85149; padding: 20px;">Failed to connect: ${error.message}</p>`;
+            }
+        }
+        
+        async function stopX11App(appId) {
+            if (!confirm('Stop this GUI application?')) return;
+            
+            try {
+                await fetch(`/api/x11/apps/${appId}`, { method: 'DELETE' });
+                
+                if (currentX11App === appId) {
+                    closeX11Panel();
+                }
+                
+                await refreshX11Apps();
+                
+            } catch (error) {
+                console.error('Failed to stop X11 app:', error);
+            }
+        }
+        
+        function closeX11Panel() {
+            if (rfbConnection) {
+                rfbConnection.disconnect();
+                rfbConnection = null;
+            }
+            currentX11App = null;
+            document.getElementById('x11Panel').style.display = 'none';
+            document.getElementById('x11Container').innerHTML = '';
+            renderX11AppList();
+        }
+        
+        // Handle Enter in X11 modal
+        document.getElementById('x11Command').addEventListener('keydown', (e) => {
+            if (e.key === 'Enter') launchX11App();
+        });
+        
+        // ========================================================================
         // Initialization
         // ========================================================================
         
         document.addEventListener('DOMContentLoaded', () => {
             initTerminal();
             connectWebSocket();
+            refreshX11Apps();
         });
     </script>
 </body>
