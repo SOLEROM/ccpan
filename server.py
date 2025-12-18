@@ -1,531 +1,492 @@
 #!/usr/bin/env python3
 """
-Tmux Control Panel - Local service for managing multiple tmux sessions.
-Each session represents a "tab" in the browser UI.
+Tmux Control Panel v2 - Alternative Implementation (Direct PTY)
+
+This version uses direct PTY spawning for the WebSocket streaming,
+while still integrating with tmux for session persistence and CLI access.
+
+Approach:
+  1. Each "session" has a tmux session AND a local PTY master/slave pair
+  2. The PTY slave runs: tmux -L control-panel attach -t <session>
+  3. PTY master streams to WebSocket, receives input from WebSocket
+  4. You can still attach directly via: tmux -L control-panel attach -t <session>
+
+Benefits:
+  - More reliable streaming (direct PTY read, not pipe-pane)
+  - Better escape sequence handling
+  - Proper resize via ioctl
+  - tmux persistence preserved
 """
 
-import subprocess
-import json
 import os
-import re
+import sys
+import json
+import subprocess
+import threading
+import select
+import pty
+import fcntl
+import struct
+import termios
+import signal
+import time
 import uuid
-from flask import Flask, render_template, jsonify, request
+import errno
+from pathlib import Path
+
+from flask import Flask, render_template, request, jsonify
+from flask_socketio import SocketIO, emit, join_room, leave_room
 from flask_cors import CORS
 
-app = Flask(__name__)
-CORS(app)
-
 # Configuration
-TMUX_SOCKET = "control-panel"  # Named socket for isolation
-SCROLLBACK_LINES = 2000  # Lines of history to capture
-SESSION_PREFIX = "cp-"  # Prefix for managed sessions
-COMMANDS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "commands.json")
+TMUX_SOCKET = "control-panel"
+SESSION_PREFIX = "cp-"
+COMMANDS_FILE = "commands.json"
+
+app = Flask(__name__)
+app.config['SECRET_KEY'] = os.urandom(24)
+CORS(app)
+socketio = SocketIO(app, cors_allowed_origins="*", async_mode='threading')
+
+# Track active PTY connections
+pty_connections = {}
 
 
+def run_tmux(*args):
+    """Run a tmux command with our socket."""
+    cmd = ["tmux", "-L", TMUX_SOCKET] + list(args)
+    result = subprocess.run(cmd, capture_output=True, text=True)
+    return result
+
+
+def get_tmux_sessions():
+    """List all our tmux sessions."""
+    result = run_tmux("list-sessions", "-F", "#{session_name}")
+    if result.returncode != 0:
+        return []
+    return [line for line in result.stdout.strip().split('\n') 
+            if line and line.startswith(SESSION_PREFIX)]
+
+
+def session_exists(name):
+    """Check if a tmux session exists."""
+    full_name = name if name.startswith(SESSION_PREFIX) else f"{SESSION_PREFIX}{name}"
+    return full_name in get_tmux_sessions()
+
+
+def create_tmux_session(name, cwd=None, initial_cmd=None):
+    """Create a new tmux session."""
+    full_name = f"{SESSION_PREFIX}{name}"
+    
+    if session_exists(full_name):
+        return False, "Session already exists"
+    
+    cmd_args = ["new-session", "-d", "-s", full_name, "-x", "200", "-y", "50"]
+    if cwd and os.path.isdir(cwd):
+        cmd_args.extend(["-c", cwd])
+    
+    result = run_tmux(*cmd_args)
+    if result.returncode != 0:
+        return False, result.stderr
+    
+    if initial_cmd:
+        time.sleep(0.1)
+        run_tmux("send-keys", "-t", full_name, initial_cmd, "Enter")
+    
+    return True, full_name
+
+
+def destroy_tmux_session(name):
+    """Destroy a tmux session and clean up PTY connection."""
+    full_name = name if name.startswith(SESSION_PREFIX) else f"{SESSION_PREFIX}{name}"
+    cleanup_pty_connection(full_name)
+    result = run_tmux("kill-session", "-t", full_name)
+    return result.returncode == 0
+
+
+def set_winsize(fd, rows, cols):
+    """Set terminal window size."""
+    winsize = struct.pack("HHHH", rows, cols, 0, 0)
+    fcntl.ioctl(fd, termios.TIOCSWINSZ, winsize)
+
+
+def spawn_pty_for_session(session_name, cols=120, rows=40):
+    """Spawn a PTY that attaches to a tmux session."""
+    full_name = session_name if session_name.startswith(SESSION_PREFIX) else f"{SESSION_PREFIX}{session_name}"
+    
+    pid, master_fd = pty.fork()
+    
+    if pid == 0:
+        # Child process
+        os.environ['TERM'] = 'xterm-256color'
+        os.execlp('tmux', 'tmux', '-L', TMUX_SOCKET, 'attach', '-t', full_name)
+    else:
+        # Parent process
+        flags = fcntl.fcntl(master_fd, fcntl.F_GETFL)
+        fcntl.fcntl(master_fd, fcntl.F_SETFL, flags | os.O_NONBLOCK)
+        set_winsize(master_fd, rows, cols)
+        return master_fd, pid
+
+
+def start_pty_reader(session_name, master_fd):
+    """Start a thread that reads from PTY and emits to WebSocket."""
+    full_name = session_name if session_name.startswith(SESSION_PREFIX) else f"{SESSION_PREFIX}{session_name}"
+    stop_event = threading.Event()
+    
+    def reader_thread():
+        try:
+            while not stop_event.is_set():
+                try:
+                    readable, _, _ = select.select([master_fd], [], [], 0.05)
+                    if readable:
+                        try:
+                            data = os.read(master_fd, 16384)
+                            if data:
+                                socketio.emit('output', {
+                                    'session': full_name,
+                                    'data': data.decode('utf-8', errors='replace')
+                                }, room=full_name)
+                            else:
+                                break  # EOF
+                        except OSError as e:
+                            if e.errno in (errno.EIO, errno.EBADF):
+                                break
+                            raise
+                except (ValueError, OSError):
+                    break
+        except Exception as e:
+            print(f"PTY reader error for {full_name}: {e}")
+        finally:
+            if full_name in pty_connections:
+                pty_connections[full_name]['reader_stopped'] = True
+    
+    thread = threading.Thread(target=reader_thread, daemon=True)
+    thread.start()
+    return thread, stop_event
+
+
+def get_or_create_pty_connection(session_name, sid, cols=120, rows=40):
+    """Get existing PTY connection or create a new one."""
+    full_name = session_name if session_name.startswith(SESSION_PREFIX) else f"{SESSION_PREFIX}{session_name}"
+    
+    if full_name in pty_connections:
+        conn = pty_connections[full_name]
+        conn['clients'].add(sid)
+        if conn.get('reader_stopped', False):
+            cleanup_pty_connection(full_name)
+        else:
+            return conn
+    
+    if not session_exists(full_name):
+        return None
+    
+    master_fd, pid = spawn_pty_for_session(full_name, cols, rows)
+    reader_thread, stop_event = start_pty_reader(full_name, master_fd)
+    
+    pty_connections[full_name] = {
+        'master_fd': master_fd,
+        'pid': pid,
+        'reader_thread': reader_thread,
+        'stop_event': stop_event,
+        'clients': {sid},
+        'reader_stopped': False
+    }
+    return pty_connections[full_name]
+
+
+def cleanup_pty_connection(session_name):
+    """Clean up PTY connection for a session."""
+    full_name = session_name if session_name.startswith(SESSION_PREFIX) else f"{SESSION_PREFIX}{session_name}"
+    
+    if full_name not in pty_connections:
+        return
+    
+    conn = pty_connections[full_name]
+    conn['stop_event'].set()
+    
+    try:
+        os.close(conn['master_fd'])
+    except:
+        pass
+    
+    try:
+        os.kill(conn['pid'], signal.SIGTERM)
+        os.waitpid(conn['pid'], os.WNOHANG)
+    except:
+        pass
+    
+    del pty_connections[full_name]
+
+
+def remove_client_from_connection(session_name, sid):
+    """Remove a client from a PTY connection."""
+    full_name = session_name if session_name.startswith(SESSION_PREFIX) else f"{SESSION_PREFIX}{session_name}"
+    
+    if full_name not in pty_connections:
+        return
+    
+    conn = pty_connections[full_name]
+    conn['clients'].discard(sid)
+    
+    if not conn['clients']:
+        def delayed_cleanup():
+            time.sleep(5)
+            if full_name in pty_connections and not pty_connections[full_name]['clients']:
+                cleanup_pty_connection(full_name)
+        threading.Thread(target=delayed_cleanup, daemon=True).start()
+
+
+def send_keys_to_session(session_name, keys):
+    """Send keys to the PTY."""
+    full_name = session_name if session_name.startswith(SESSION_PREFIX) else f"{SESSION_PREFIX}{session_name}"
+    
+    if full_name in pty_connections:
+        try:
+            os.write(pty_connections[full_name]['master_fd'], keys.encode('utf-8'))
+            return True
+        except:
+            pass
+    
+    result = run_tmux("send-keys", "-t", full_name, "-l", keys)
+    return result.returncode == 0
+
+
+def resize_session(session_name, cols, rows):
+    """Resize both the PTY and tmux session."""
+    full_name = session_name if session_name.startswith(SESSION_PREFIX) else f"{SESSION_PREFIX}{session_name}"
+    
+    if full_name in pty_connections:
+        try:
+            set_winsize(pty_connections[full_name]['master_fd'], rows, cols)
+        except:
+            pass
+    
+    run_tmux("resize-window", "-t", full_name, "-x", str(cols), "-y", str(rows))
+
+
+def send_signal_to_session(session_name, sig):
+    """Send a signal to the foreground process."""
+    full_name = session_name if session_name.startswith(SESSION_PREFIX) else f"{SESSION_PREFIX}{session_name}"
+    
+    result = run_tmux("display-message", "-t", full_name, "-p", "#{pane_pid}")
+    if result.returncode != 0:
+        return False
+    
+    try:
+        pane_pid = int(result.stdout.strip())
+        children = subprocess.run(["pgrep", "-P", str(pane_pid)], capture_output=True, text=True)
+        if children.stdout.strip():
+            for child_pid in children.stdout.strip().split('\n'):
+                try:
+                    os.kill(int(child_pid), sig)
+                except:
+                    pass
+        else:
+            os.kill(pane_pid, sig)
+        return True
+    except:
+        return False
+
+
+# Custom Commands
 def load_commands():
-    """Load custom commands from JSON file."""
     if os.path.exists(COMMANDS_FILE):
         try:
-            with open(COMMANDS_FILE, "r") as f:
+            with open(COMMANDS_FILE, 'r') as f:
                 return json.load(f)
-        except (json.JSONDecodeError, IOError):
-            return {}
+        except:
+            pass
     return {}
 
 
 def save_commands(commands):
-    """Save custom commands to JSON file."""
-    try:
-        with open(COMMANDS_FILE, "w") as f:
-            json.dump(commands, f, indent=2)
-        return True
-    except IOError:
-        return False
+    with open(COMMANDS_FILE, 'w') as f:
+        json.dump(commands, f, indent=2)
 
 
-def run_tmux(*args, timeout=10):
-    """Execute a tmux command with the control panel socket."""
-    cmd = ["tmux", "-L", TMUX_SOCKET] + list(args)
-    try:
-        result = subprocess.run(
-            cmd,
-            capture_output=True,
-            text=True,
-            timeout=timeout
-        )
-        return result.stdout, result.stderr, result.returncode
-    except subprocess.TimeoutExpired:
-        return "", "Command timed out", 1
-    except Exception as e:
-        return "", str(e), 1
+# WebSocket Handlers
+@socketio.on('connect')
+def handle_connect():
+    emit('connected', {'status': 'ok'})
 
 
-def session_exists(session_name):
-    """Check if a tmux session exists."""
-    _, _, rc = run_tmux("has-session", "-t", session_name)
-    return rc == 0
+@socketio.on('disconnect')
+def handle_disconnect():
+    for session_name in list(pty_connections.keys()):
+        remove_client_from_connection(session_name, request.sid)
 
 
-def list_sessions():
-    """List all managed tmux sessions with metadata."""
-    stdout, stderr, rc = run_tmux(
-        "list-sessions",
-        "-F", "#{session_name}|#{session_created}|#{session_activity}|#{session_windows}"
-    )
+@socketio.on('subscribe')
+def handle_subscribe(data):
+    session_name = data.get('session')
+    cols = data.get('cols', 120)
+    rows = data.get('rows', 40)
     
-    sessions = []
-    if rc == 0 and stdout:
-        for line in stdout.strip().split("\n"):
-            if line:
-                parts = line.split("|")
-                if len(parts) >= 4 and parts[0].startswith(SESSION_PREFIX):
-                    sessions.append({
-                        "name": parts[0],
-                        "display_name": parts[0][len(SESSION_PREFIX):],
-                        "created": int(parts[1]) if parts[1].isdigit() else 0,
-                        "last_activity": int(parts[2]) if parts[2].isdigit() else 0,
-                        "windows": int(parts[3]) if parts[3].isdigit() else 1
-                    })
+    if not session_name:
+        emit('error', {'message': 'No session specified'})
+        return
     
-    return sessions
+    full_name = session_name if session_name.startswith(SESSION_PREFIX) else f"{SESSION_PREFIX}{session_name}"
+    
+    if not session_exists(full_name):
+        emit('error', {'message': f'Session {full_name} does not exist'})
+        return
+    
+    join_room(full_name)
+    conn = get_or_create_pty_connection(full_name, request.sid, cols, rows)
+    
+    if not conn:
+        emit('error', {'message': f'Failed to connect to session {full_name}'})
+        return
+    
+    emit('subscribed', {'session': full_name})
 
 
-def create_session(name, working_dir=None, initial_command=None):
-    """Create a new tmux session."""
-    session_name = f"{SESSION_PREFIX}{name}"
+@socketio.on('unsubscribe')
+def handle_unsubscribe(data):
+    session_name = data.get('session')
+    if not session_name:
+        return
     
-    if session_exists(session_name):
-        return False, f"Session '{name}' already exists"
-    
-    # Build creation command - set reasonable window size
-    cmd_args = ["new-session", "-d", "-s", session_name, "-x", "120", "-y", "30"]
-    
-    if working_dir and os.path.isdir(working_dir):
-        cmd_args.extend(["-c", working_dir])
-    
-    stdout, stderr, rc = run_tmux(*cmd_args)
-    
-    if rc != 0:
-        return False, stderr or "Failed to create session"
-    
-    # Set up session with larger scrollback
-    run_tmux("set-option", "-t", session_name, "history-limit", "50000")
-    
-    # Send initial command if provided - wait a bit for shell to be ready
-    if initial_command:
-        import time
-        time.sleep(0.3)  # Wait for shell prompt to be ready
-        send_keys(session_name, initial_command, enter=True)
-    
-    return True, session_name
+    full_name = session_name if session_name.startswith(SESSION_PREFIX) else f"{SESSION_PREFIX}{session_name}"
+    leave_room(full_name)
+    remove_client_from_connection(full_name, request.sid)
+    emit('unsubscribed', {'session': full_name})
 
 
-def destroy_session(session_name):
-    """Destroy a tmux session."""
-    if not session_name.startswith(SESSION_PREFIX):
-        session_name = f"{SESSION_PREFIX}{session_name}"
-    
-    if not session_exists(session_name):
-        return False, f"Session '{session_name}' does not exist"
-    
-    stdout, stderr, rc = run_tmux("kill-session", "-t", session_name)
-    
-    if rc != 0:
-        return False, stderr or "Failed to destroy session"
-    
-    return True, "Session destroyed"
+@socketio.on('input')
+def handle_input(data):
+    session_name = data.get('session')
+    keys = data.get('keys', '')
+    if session_name and keys:
+        full_name = session_name if session_name.startswith(SESSION_PREFIX) else f"{SESSION_PREFIX}{session_name}"
+        send_keys_to_session(full_name, keys)
 
 
-def send_keys(session_name, keys, enter=False, raw=False):
-    """Send keystrokes to a tmux session."""
-    if not session_name.startswith(SESSION_PREFIX):
-        session_name = f"{SESSION_PREFIX}{session_name}"
-    
-    if not session_exists(session_name):
-        return False, f"Session '{session_name}' does not exist"
-    
-    if raw:
-        # Raw mode: send keys exactly as received from xterm.js
-        # This handles special keys like Enter, Backspace, Arrow keys, etc.
-        # xterm.js sends these as escape sequences
-        stdout, stderr, rc = run_tmux("send-keys", "-t", session_name, "-l", keys)
-    elif enter:
-        # Send command followed by Enter
-        stdout, stderr, rc = run_tmux("send-keys", "-t", session_name, "-l", keys)
-        if rc != 0:
-            return False, stderr or "Failed to send keys"
-        # Send Enter separately (not literal)
-        stdout, stderr, rc = run_tmux("send-keys", "-t", session_name, "Enter")
-    else:
-        stdout, stderr, rc = run_tmux("send-keys", "-t", session_name, "-l", keys)
-    
-    if rc != 0:
-        return False, stderr or "Failed to send keys"
-    
-    return True, "Keys sent"
+@socketio.on('resize')
+def handle_resize(data):
+    session_name = data.get('session')
+    cols = data.get('cols', 80)
+    rows = data.get('rows', 24)
+    if session_name:
+        full_name = session_name if session_name.startswith(SESSION_PREFIX) else f"{SESSION_PREFIX}{session_name}"
+        resize_session(full_name, cols, rows)
 
 
-def capture_output(session_name, lines=None):
-    """Capture recent output from a tmux session with escape sequences."""
-    if not session_name.startswith(SESSION_PREFIX):
-        session_name = f"{SESSION_PREFIX}{session_name}"
+@socketio.on('signal')
+def handle_signal(data):
+    session_name = data.get('session')
+    sig_name = data.get('signal', 'SIGINT')
     
-    if not session_exists(session_name):
-        return None, f"Session '{session_name}' does not exist"
+    if not session_name:
+        return
     
-    # Capture visible pane content with escape sequences for colors
-    stdout, stderr, rc = run_tmux(
-        "capture-pane",
-        "-t", session_name,
-        "-p",           # Print to stdout
-        "-e",           # Include escape sequences (ANSI colors)
-    )
-    
-    if rc != 0:
-        return None, stderr or "Failed to capture output"
-    
-    return stdout, None
-
-
-def get_pane_content_and_cursor(session_name):
-    """Get pane content along with cursor position for proper terminal sync."""
-    if not session_name.startswith(SESSION_PREFIX):
-        session_name = f"{SESSION_PREFIX}{session_name}"
-    
-    if not session_exists(session_name):
-        return None, f"Session '{session_name}' does not exist"
-    
-    # Get pane info including cursor position
-    info_stdout, _, info_rc = run_tmux(
-        "display-message", "-t", session_name, "-p", 
-        "#{cursor_x}:#{cursor_y}:#{pane_width}:#{pane_height}"
-    )
-    
-    cursor_x, cursor_y, pane_width, pane_height = 0, 0, 80, 24
-    if info_rc == 0 and info_stdout:
-        try:
-            parts = info_stdout.strip().split(':')
-            cursor_x = int(parts[0])
-            cursor_y = int(parts[1])
-            pane_width = int(parts[2])
-            pane_height = int(parts[3])
-        except (ValueError, IndexError):
-            pass
-    
-    # Capture visible pane with escape sequences
-    content_stdout, stderr, content_rc = run_tmux(
-        "capture-pane",
-        "-t", session_name,
-        "-p",           # Print to stdout
-        "-e",           # Include escape sequences (colors)
-    )
-    
-    if content_rc != 0:
-        return None, stderr or "Failed to capture output"
-    
-    # Don't strip trailing lines - we need them for cursor positioning
-    # But do strip trailing whitespace from each line
-    lines = content_stdout.split('\n')
-    
-    # Find the last non-empty line
-    last_content_line = 0
-    for i, line in enumerate(lines):
-        if line.strip():
-            last_content_line = i
-    
-    # Keep lines up to cursor position or last content, whichever is greater
-    keep_until = max(last_content_line, cursor_y) + 1
-    trimmed_lines = lines[:keep_until]
-    
-    return {
-        "content": '\n'.join(trimmed_lines),
-        "cursor_x": cursor_x,
-        "cursor_y": cursor_y,
-        "width": pane_width,
-        "height": pane_height
-    }, None
-
-
-def send_signal(session_name, signal="INT"):
-    """Send a signal to the process in a tmux session."""
-    if not session_name.startswith(SESSION_PREFIX):
-        session_name = f"{SESSION_PREFIX}{session_name}"
-    
-    if not session_exists(session_name):
-        return False, f"Session '{session_name}' does not exist"
-    
-    signal_keys = {
-        "INT": "C-c",      # Ctrl+C
-        "QUIT": "C-\\",    # Ctrl+\
-        "STOP": "C-z",     # Ctrl+Z
-        "EOF": "C-d",      # Ctrl+D
+    full_name = session_name if session_name.startswith(SESSION_PREFIX) else f"{SESSION_PREFIX}{session_name}"
+    sig_map = {
+        'SIGINT': signal.SIGINT, 'SIGTERM': signal.SIGTERM, 'SIGKILL': signal.SIGKILL,
+        'SIGSTOP': signal.SIGSTOP, 'SIGCONT': signal.SIGCONT, 'SIGTSTP': signal.SIGTSTP,
     }
-    
-    key = signal_keys.get(signal.upper(), "C-c")
-    
-    # Send the control key (not literal)
-    stdout, stderr, rc = run_tmux("send-keys", "-t", session_name, key)
-    
-    if rc != 0:
-        return False, stderr or "Failed to send signal"
-    
-    return True, "Signal sent"
+    send_signal_to_session(full_name, sig_map.get(sig_name, signal.SIGINT))
 
 
-# Flask Routes
-
-@app.route("/")
+# REST API
+@app.route('/')
 def index():
-    """Serve the main UI."""
-    return render_template("index.html")
+    return render_template('index.html')
 
 
-@app.route("/api/sessions", methods=["GET"])
-def api_list_sessions():
-    """List all sessions."""
-    sessions = list_sessions()
-    return jsonify({"success": True, "sessions": sessions})
+@app.route('/api/sessions', methods=['GET'])
+def list_sessions():
+    return jsonify({'sessions': get_tmux_sessions(), 'count': len(get_tmux_sessions())})
 
 
-@app.route("/api/sessions", methods=["POST"])
-def api_create_session():
-    """Create a new session."""
+@app.route('/api/sessions', methods=['POST'])
+def create_session():
     data = request.get_json() or {}
-    name = data.get("name", f"session-{uuid.uuid4().hex[:8]}")
-    working_dir = data.get("working_dir")
-    initial_command = data.get("initial_command")
-    
-    # Sanitize name
-    name = re.sub(r"[^a-zA-Z0-9_-]", "-", name)
-    
-    success, result = create_session(name, working_dir, initial_command)
-    
+    name = data.get('name', f"session-{uuid.uuid4().hex[:8]}")
+    success, result = create_tmux_session(name, data.get('cwd'), data.get('command'))
     if success:
-        return jsonify({"success": True, "session": result})
-    return jsonify({"success": False, "error": result}), 400
+        return jsonify({'status': 'ok', 'session': result})
+    return jsonify({'status': 'error', 'message': result}), 400
 
 
-@app.route("/api/sessions/<session_name>", methods=["DELETE"])
-def api_destroy_session(session_name):
-    """Destroy a session."""
-    success, result = destroy_session(session_name)
-    
-    if success:
-        return jsonify({"success": True, "message": result})
-    return jsonify({"success": False, "error": result}), 400
+@app.route('/api/sessions/<name>', methods=['DELETE'])
+def delete_session(name):
+    if destroy_tmux_session(name):
+        return jsonify({'status': 'ok'})
+    return jsonify({'status': 'error', 'message': 'Failed to destroy session'}), 400
 
 
-@app.route("/api/sessions/<session_name>/output", methods=["GET"])
-def api_get_output(session_name):
-    """Get output from a session."""
-    output, error = capture_output(session_name)
-    
-    if output is not None:
-        return jsonify({"success": True, "output": output})
-    return jsonify({"success": False, "error": error}), 400
-
-
-@app.route("/api/sessions/<session_name>/terminal", methods=["GET"])
-def api_get_terminal_state(session_name):
-    """Get terminal state including cursor position for xterm.js sync."""
-    state, error = get_pane_content_and_cursor(session_name)
-    
-    if state is not None:
-        return jsonify({"success": True, **state})
-    return jsonify({"success": False, "error": error}), 400
-
-
-@app.route("/api/sessions/<session_name>/send", methods=["POST"])
-def api_send_keys(session_name):
-    """Send keys to a session."""
+@app.route('/api/sessions/<name>/command', methods=['POST'])
+def run_command(name):
     data = request.get_json() or {}
-    keys = data.get("keys", "")
-    enter = data.get("enter", True)
-    raw = data.get("raw", False)
-    
-    if not keys:
-        return jsonify({"success": False, "error": "No keys provided"}), 400
-    
-    success, result = send_keys(session_name, keys, enter, raw)
-    
-    if success:
-        return jsonify({"success": True, "message": result})
-    return jsonify({"success": False, "error": result}), 400
-
-
-@app.route("/api/sessions/<session_name>/signal", methods=["POST"])
-def api_send_signal(session_name):
-    """Send a signal to a session."""
-    data = request.get_json() or {}
-    signal = data.get("signal", "INT")
-    
-    success, result = send_signal(session_name, signal)
-    
-    if success:
-        return jsonify({"success": True, "message": result})
-    return jsonify({"success": False, "error": result}), 400
-
-
-@app.route("/api/sessions/<session_name>/command", methods=["POST"])
-def api_run_command(session_name):
-    """Run a predefined command in a session."""
-    data = request.get_json() or {}
-    command = data.get("command", "")
-    
+    command = data.get('command', '')
     if not command:
-        return jsonify({"success": False, "error": "No command provided"}), 400
+        return jsonify({'status': 'error', 'message': 'No command provided'}), 400
     
-    success, result = send_keys(session_name, command, enter=True)
+    full_name = name if name.startswith(SESSION_PREFIX) else f"{SESSION_PREFIX}{name}"
+    if not session_exists(full_name):
+        return jsonify({'status': 'error', 'message': 'Session not found'}), 404
     
-    if success:
-        return jsonify({"success": True, "message": result})
-    return jsonify({"success": False, "error": result}), 400
+    if send_keys_to_session(full_name, command + '\n'):
+        return jsonify({'status': 'ok'})
+    return jsonify({'status': 'error', 'message': 'Failed to send command'}), 400
 
 
-@app.route("/api/sessions/<session_name>/resize", methods=["POST"])
-def api_resize_session(session_name):
-    """Resize the tmux pane to match xterm.js dimensions."""
-    if not session_name.startswith(SESSION_PREFIX):
-        session_name = f"{SESSION_PREFIX}{session_name}"
-    
+@app.route('/api/commands', methods=['GET'])
+def get_all_commands():
+    return jsonify(load_commands())
+
+
+@app.route('/api/commands/<session>', methods=['GET'])
+def get_session_commands(session):
+    return jsonify(load_commands().get(session, []))
+
+
+@app.route('/api/commands/<session>', methods=['POST'])
+def add_command(session):
     data = request.get_json() or {}
-    cols = data.get("cols", 80)
-    rows = data.get("rows", 24)
-    
-    # Resize the tmux window/pane
-    stdout, stderr, rc = run_tmux(
-        "resize-window", "-t", session_name, "-x", str(cols), "-y", str(rows)
-    )
-    
-    if rc != 0:
-        # Try resize-pane as fallback
-        stdout, stderr, rc = run_tmux(
-            "resize-pane", "-t", session_name, "-x", str(cols), "-y", str(rows)
-        )
-    
-    return jsonify({"success": rc == 0, "cols": cols, "rows": rows})
-
-
-# Custom commands storage endpoints
-
-@app.route("/api/commands", methods=["GET"])
-def api_get_all_commands():
-    """Get all custom commands for all sessions."""
-    commands = load_commands()
-    return jsonify({"success": True, "commands": commands})
-
-
-@app.route("/api/commands/<session_name>", methods=["GET"])
-def api_get_commands(session_name):
-    """Get custom commands for a session."""
-    if not session_name.startswith(SESSION_PREFIX):
-        session_name = f"{SESSION_PREFIX}{session_name}"
+    if not data.get('command'):
+        return jsonify({'status': 'error', 'message': 'No command provided'}), 400
     
     commands = load_commands()
-    session_commands = commands.get(session_name, [])
-    return jsonify({"success": True, "commands": session_commands})
+    if session not in commands:
+        commands[session] = []
+    commands[session].append({'label': data.get('label', 'Command'), 'command': data['command']})
+    save_commands(commands)
+    return jsonify({'status': 'ok', 'commands': commands[session]})
 
 
-@app.route("/api/commands/<session_name>", methods=["POST"])
-def api_add_command(session_name):
-    """Add a custom command for a session."""
-    if not session_name.startswith(SESSION_PREFIX):
-        session_name = f"{SESSION_PREFIX}{session_name}"
-    
-    data = request.get_json() or {}
-    label = data.get("label", "").strip()
-    command = data.get("command", "").strip()
-    
-    if not label or not command:
-        return jsonify({"success": False, "error": "Label and command are required"}), 400
-    
+@app.route('/api/commands/<session>/<int:index>', methods=['DELETE'])
+def delete_command(session, index):
     commands = load_commands()
-    if session_name not in commands:
-        commands[session_name] = []
-    
-    commands[session_name].append({"label": label, "command": command})
-    
-    if save_commands(commands):
-        return jsonify({"success": True, "commands": commands[session_name]})
-    return jsonify({"success": False, "error": "Failed to save commands"}), 500
+    if session not in commands or index >= len(commands[session]):
+        return jsonify({'status': 'error', 'message': 'Command not found'}), 404
+    commands[session].pop(index)
+    save_commands(commands)
+    return jsonify({'status': 'ok', 'commands': commands[session]})
 
 
-@app.route("/api/commands/<session_name>/<int:index>", methods=["DELETE"])
-def api_delete_command(session_name, index):
-    """Delete a custom command by index."""
-    if not session_name.startswith(SESSION_PREFIX):
-        session_name = f"{SESSION_PREFIX}{session_name}"
-    
-    commands = load_commands()
-    if session_name not in commands:
-        return jsonify({"success": False, "error": "No commands for this session"}), 404
-    
-    if index < 0 or index >= len(commands[session_name]):
-        return jsonify({"success": False, "error": "Invalid command index"}), 400
-    
-    deleted = commands[session_name].pop(index)
-    
-    if save_commands(commands):
-        return jsonify({"success": True, "deleted": deleted, "commands": commands[session_name]})
-    return jsonify({"success": False, "error": "Failed to save commands"}), 500
+def cleanup():
+    print("\nCleaning up...")
+    for session_name in list(pty_connections.keys()):
+        cleanup_pty_connection(session_name)
 
 
-@app.route("/api/health", methods=["GET"])
-def api_health():
-    """Health check endpoint."""
-    # Check if tmux is available
-    stdout, stderr, rc = run_tmux("list-sessions")
-    tmux_ok = rc in [0, 1]  # 1 means no sessions, which is fine
+if __name__ == '__main__':
+    import atexit
+    atexit.register(cleanup)
     
-    return jsonify({
-        "success": True,
-        "tmux_available": tmux_ok,
-        "socket": TMUX_SOCKET
-    })
-
-
-# Debug endpoint to test capture
-@app.route("/api/sessions/<session_name>/debug", methods=["GET"])
-def api_debug_session(session_name):
-    """Debug endpoint to see raw tmux output."""
-    if not session_name.startswith(SESSION_PREFIX):
-        session_name = f"{SESSION_PREFIX}{session_name}"
+    print(f"""
+╔══════════════════════════════════════════════════════════════════╗
+║         Tmux Control Panel v2 - Direct PTY Edition               ║
+╠══════════════════════════════════════════════════════════════════╣
+║  • WebSocket for real-time bidirectional communication           ║
+║  • Direct PTY streaming (more reliable than pipe-pane)           ║
+║  • Still uses tmux backend - attach anytime with:                ║
+║      tmux -L {TMUX_SOCKET} attach -t <session>               
+╚══════════════════════════════════════════════════════════════════╝
+""")
     
-    # Try different capture methods
-    results = {}
-    
-    # Method 1: Full history
-    stdout1, stderr1, rc1 = run_tmux(
-        "capture-pane", "-t", session_name, "-p", "-S", "-", "-E", "-"
-    )
-    results["full_history"] = {"stdout": stdout1[:500], "stderr": stderr1, "rc": rc1}
-    
-    # Method 2: Last N lines
-    stdout2, stderr2, rc2 = run_tmux(
-        "capture-pane", "-t", session_name, "-p", "-S", "-100"
-    )
-    results["last_100"] = {"stdout": stdout2[:500], "stderr": stderr2, "rc": rc2}
-    
-    # Method 3: Visible only
-    stdout3, stderr3, rc3 = run_tmux(
-        "capture-pane", "-t", session_name, "-p"
-    )
-    results["visible"] = {"stdout": stdout3[:500], "stderr": stderr3, "rc": rc3}
-    
-    return jsonify(results)
-
-
-if __name__ == "__main__":
-    import argparse
-    
-    parser = argparse.ArgumentParser(description="Tmux Control Panel Server")
-    parser.add_argument("--host", default="127.0.0.1", help="Host to bind to")
-    parser.add_argument("--port", type=int, default=5000, help="Port to bind to")
-    parser.add_argument("--debug", action="store_true", help="Enable debug mode")
-    
-    args = parser.parse_args()
-    
-    print(f"Starting Tmux Control Panel on http://{args.host}:{args.port}")
-    print(f"tmux socket: {TMUX_SOCKET}")
-    print(f"Session prefix: {SESSION_PREFIX}")
-    app.run(host=args.host, port=args.port, debug=args.debug)
+    print("Server starting on http://127.0.0.1:5000")
+    socketio.run(app, host='127.0.0.1', port=5000, debug=False)

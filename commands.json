@@ -10,5 +10,11 @@
       "label": "aaa",
       "command": "ls"
     }
+  ],
+  "cp-aaa": [
+    {
+      "label": "cc",
+      "command": "clear"
+    }
   ]
 }
