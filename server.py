@@ -47,7 +47,8 @@ COMMANDS_FILE = "commands.json"
 
 # X11 Configuration
 XVFB_DISPLAY_BASE = 99  # Start display numbers from :99
-X11_APPS = {}  # Track running X11 apps: {app_id: {display, xvfb_pid, app_pid, vnc_pid, ws_port}}
+X11_APPS = {}  # Track standalone X11 apps: {app_id: {display, xvfb_pid, app_pid, vnc_pid, ws_port}}
+SESSION_DISPLAYS = {}  # Track X11 displays for sessions: {session_name: {display, xvfb_pid, vnc_pid, ws_pid, ws_port}}
 
 app = Flask(__name__)
 app.config['SECRET_KEY'] = os.urandom(24)
@@ -780,8 +781,211 @@ def cleanup_x11_apps():
         stop_x11_app(app_id)
 
 
+# ============================================================================
+# Session X11 Display Management
+# ============================================================================
+
+def start_session_display(session_name, width=800, height=600):
+    """
+    Start an X11 display for a tmux session.
+    
+    This creates a virtual X server that the session can use.
+    Any GUI app launched in the session will appear on this display.
+    """
+    full_name = session_name if session_name.startswith(SESSION_PREFIX) else f"{SESSION_PREFIX}{session_name}"
+    
+    # Check if already has a display
+    if full_name in SESSION_DISPLAYS:
+        info = SESSION_DISPLAYS[full_name]
+        return {
+            'session': full_name,
+            'display': info['display'],
+            'ws_port': info['ws_port'],
+            'width': info['width'],
+            'height': info['height']
+        }, None
+    
+    # Check dependencies
+    missing = check_x11_dependencies()
+    if missing:
+        return None, f"Missing dependencies: {', '.join(missing)}"
+    
+    # Find free display and ports
+    display_num = find_free_display()
+    if display_num is None:
+        return None, "No free X display available"
+    
+    vnc_port = find_free_port(5900, 5999)
+    if vnc_port is None:
+        return None, "No free VNC port available"
+    
+    ws_port = find_free_port(6080, 6180)
+    if ws_port is None:
+        return None, "No free WebSocket port available"
+    
+    display = f":{display_num}"
+    
+    try:
+        # Start Xvfb
+        xvfb_cmd = [
+            "Xvfb", display,
+            "-screen", "0", f"{width}x{height}x24",
+            "-ac",
+            "+extension", "GLX"
+        ]
+        xvfb_proc = subprocess.Popen(
+            xvfb_cmd,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL
+        )
+        time.sleep(0.5)
+        
+        if xvfb_proc.poll() is not None:
+            return None, "Failed to start Xvfb"
+        
+        # Start x11vnc
+        vnc_cmd = [
+            "x11vnc",
+            "-display", display,
+            "-rfbport", str(vnc_port),
+            "-nopw",
+            "-forever",
+            "-shared",
+            "-noxdamage",
+            "-wait", "5",
+            "-defer", "5"
+        ]
+        vnc_proc = subprocess.Popen(
+            vnc_cmd,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL
+        )
+        time.sleep(0.5)
+        
+        if vnc_proc.poll() is not None:
+            xvfb_proc.terminate()
+            return None, "Failed to start x11vnc"
+        
+        # Start websockify
+        ws_cmd = [
+            "websockify",
+            str(ws_port),
+            f"127.0.0.1:{vnc_port}"
+        ]
+        ws_proc = subprocess.Popen(
+            ws_cmd,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL
+        )
+        time.sleep(0.3)
+        
+        if ws_proc.poll() is not None:
+            vnc_proc.terminate()
+            xvfb_proc.terminate()
+            return None, "Failed to start websockify"
+        
+        # Set DISPLAY environment in the tmux session
+        run_tmux("set-environment", "-t", full_name, "DISPLAY", display)
+        
+        # Unset Wayland to force X11
+        run_tmux("set-environment", "-t", full_name, "-u", "WAYLAND_DISPLAY")
+        run_tmux("set-environment", "-t", full_name, "GDK_BACKEND", "x11")
+        run_tmux("set-environment", "-t", full_name, "QT_QPA_PLATFORM", "xcb")
+        
+        # Send commands to set up the environment in the shell
+        # Using a single compound command to ensure it all runs
+        env_setup = f"export DISPLAY={display} && unset WAYLAND_DISPLAY && export GDK_BACKEND=x11 && export QT_QPA_PLATFORM=xcb"
+        run_tmux("send-keys", "-t", full_name, env_setup, "Enter")
+        
+        # Store display info
+        SESSION_DISPLAYS[full_name] = {
+            'display': display,
+            'display_num': display_num,
+            'xvfb_pid': xvfb_proc.pid,
+            'vnc_pid': vnc_proc.pid,
+            'vnc_port': vnc_port,
+            'ws_pid': ws_proc.pid,
+            'ws_port': ws_port,
+            'width': width,
+            'height': height
+        }
+        
+        return {
+            'session': full_name,
+            'display': display,
+            'ws_port': ws_port,
+            'width': width,
+            'height': height
+        }, None
+        
+    except Exception as e:
+        return None, str(e)
+
+
+def stop_session_display(session_name):
+    """Stop the X11 display for a session."""
+    full_name = session_name if session_name.startswith(SESSION_PREFIX) else f"{SESSION_PREFIX}{session_name}"
+    
+    if full_name not in SESSION_DISPLAYS:
+        return False, "No display for this session"
+    
+    info = SESSION_DISPLAYS[full_name]
+    
+    # Kill processes
+    for pid_key in ['ws_pid', 'vnc_pid', 'xvfb_pid']:
+        pid = info.get(pid_key)
+        if pid:
+            try:
+                os.kill(pid, signal.SIGTERM)
+                time.sleep(0.1)
+                os.kill(pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+            except Exception:
+                pass
+    
+    # Unset DISPLAY in session
+    run_tmux("set-environment", "-t", full_name, "-u", "DISPLAY")
+    run_tmux("send-keys", "-t", full_name, "unset DISPLAY", "Enter")
+    
+    del SESSION_DISPLAYS[full_name]
+    return True, None
+
+
+def get_session_display(session_name):
+    """Get the X11 display info for a session."""
+    full_name = session_name if session_name.startswith(SESSION_PREFIX) else f"{SESSION_PREFIX}{session_name}"
+    
+    if full_name not in SESSION_DISPLAYS:
+        return None
+    
+    info = SESSION_DISPLAYS[full_name]
+    
+    # Check if still alive
+    try:
+        os.kill(info['xvfb_pid'], 0)
+    except ProcessLookupError:
+        stop_session_display(full_name)
+        return None
+    
+    return {
+        'session': full_name,
+        'display': info['display'],
+        'ws_port': info['ws_port'],
+        'width': info['width'],
+        'height': info['height']
+    }
+
+
+def cleanup_session_displays():
+    """Clean up all session displays on exit."""
+    for session_name in list(SESSION_DISPLAYS.keys()):
+        stop_session_display(session_name)
+
+
 # Register cleanup
 atexit.register(cleanup_x11_apps)
+atexit.register(cleanup_session_displays)
 
 
 # REST API
@@ -907,6 +1111,39 @@ def check_x11_deps():
             'missing': missing,
             'install_cmd': f"sudo apt install xvfb x11vnc novnc websockify"
         })
+    return jsonify({'status': 'ok'})
+
+
+# Session X11 Display API
+@app.route('/api/sessions/<session>/display', methods=['GET'])
+def get_session_display_endpoint(session):
+    """Get the X11 display for a session."""
+    display_info = get_session_display(session)
+    if display_info:
+        return jsonify({'status': 'ok', 'display': display_info})
+    return jsonify({'status': 'none', 'message': 'No display for this session'})
+
+
+@app.route('/api/sessions/<session>/display', methods=['POST'])
+def start_session_display_endpoint(session):
+    """Start an X11 display for a session."""
+    data = request.get_json() or {}
+    width = data.get('width', 800)
+    height = data.get('height', 600)
+    
+    result, error = start_session_display(session, width, height)
+    if error:
+        return jsonify({'status': 'error', 'message': error}), 400
+    
+    return jsonify({'status': 'ok', 'display': result})
+
+
+@app.route('/api/sessions/<session>/display', methods=['DELETE'])
+def stop_session_display_endpoint(session):
+    """Stop the X11 display for a session."""
+    success, error = stop_session_display(session)
+    if not success:
+        return jsonify({'status': 'error', 'message': error}), 404
     return jsonify({'status': 'ok'})
 
 
