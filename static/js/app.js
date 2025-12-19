@@ -237,11 +237,18 @@ function initTerminal() {
     
     state.terminal.onData((data) => {
         if (state.currentSession && state.socket && state.socket.connected) {
+            // If in copy mode, exit it first but don't send 'q' - just send the actual key
+            // The terminal input will naturally exit copy-mode in tmux
             if (state.inCopyMode) {
-                state.socket.emit('scroll', { session: state.currentSession, command: 'exit' });
                 state.inCopyMode = false;
+                // Send Escape to exit copy-mode cleanly, then send the actual key
+                state.socket.emit('input', { session: state.currentSession, keys: '\x1b' });
+                setTimeout(() => {
+                    state.socket.emit('input', { session: state.currentSession, keys: data });
+                }, 10);
+            } else {
+                state.socket.emit('input', { session: state.currentSession, keys: data });
             }
-            state.socket.emit('input', { session: state.currentSession, keys: data });
         }
     });
     

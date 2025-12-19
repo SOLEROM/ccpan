@@ -79,12 +79,11 @@ def register_routes(app):
         return jsonify({'status': 'error', 'message': result}), 400
     
     @app.route('/api/sessions/<name>', methods=['DELETE'])
-    def delete_session(n):
+    def delete_session(name):
         """Delete a tmux session."""
         mgrs = get_managers()
         socket = request.args.get('socket')
-        name = n
-        
+                
         # Cleanup PTY connection first
         mgrs['pty'].cleanup(name)
         
@@ -93,10 +92,9 @@ def register_routes(app):
         return jsonify({'status': 'error', 'message': 'Failed to destroy session'}), 400
     
     @app.route('/api/sessions/<name>/command', methods=['POST'])
-    def run_command(n):
+    def run_command(name):
         """Run a command in a session."""
         mgrs = get_managers()
-        name = n
         data = request.get_json() or {}
         command = data.get('command', '')
         socket = data.get('socket')
