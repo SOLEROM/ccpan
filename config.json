@@ -1,0 +1,9 @@
+{
+  "tmux_socket": "test1",
+  "session_prefix": "cp-",
+  "xvfb_display_base": 99,
+  "commands_file": "commands.json",
+  "default_cols": 120,
+  "default_rows": 40,
+  "scrollback_limit": 50000
+}
