@@ -59,6 +59,20 @@ socketio = SocketIO(app, cors_allowed_origins="*", async_mode=ASYNC_MODE)
 pty_connections = {}
 
 
+def get_clean_x11_env(display):
+    """Get a clean environment for X11 processes without Wayland."""
+    clean_env = os.environ.copy()
+    # Remove Wayland-related variables
+    clean_env.pop('WAYLAND_DISPLAY', None)
+    clean_env.pop('XDG_SESSION_TYPE', None)
+    # Set X11 display
+    clean_env['DISPLAY'] = display
+    # Force X11 backend for various toolkits
+    clean_env['GDK_BACKEND'] = 'x11'
+    clean_env['QT_QPA_PLATFORM'] = 'xcb'
+    return clean_env
+
+
 def run_tmux(*args):
     """Run a tmux command with our socket."""
     cmd = ["tmux", "-L", TMUX_SOCKET] + list(args)
@@ -634,6 +648,9 @@ def start_x11_app(app_command, width=400, height=400, app_id=None):
     display = f":{display_num}"
     app_id = app_id or f"app-{uuid.uuid4().hex[:8]}"
     
+    # Get clean environment for X11 (without Wayland)
+    clean_env = get_clean_x11_env(display)
+    
     try:
         # Start Xvfb (virtual framebuffer)
         xvfb_cmd = [
@@ -645,7 +662,8 @@ def start_x11_app(app_command, width=400, height=400, app_id=None):
         xvfb_proc = subprocess.Popen(
             xvfb_cmd,
             stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL
+            stderr=subprocess.DEVNULL,
+            env=clean_env
         )
         time.sleep(0.5)  # Wait for Xvfb to start
         
@@ -653,13 +671,10 @@ def start_x11_app(app_command, width=400, height=400, app_id=None):
             return None, "Failed to start Xvfb"
         
         # Start the X11 application
-        env = os.environ.copy()
-        env['DISPLAY'] = display
-        
         app_proc = subprocess.Popen(
             app_command,
             shell=True,
-            env=env,
+            env=clean_env,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL
         )
@@ -684,7 +699,8 @@ def start_x11_app(app_command, width=400, height=400, app_id=None):
         vnc_proc = subprocess.Popen(
             vnc_cmd,
             stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL
+            stderr=subprocess.DEVNULL,
+            env=clean_env
         )
         time.sleep(0.5)  # Wait for VNC to start
         
@@ -841,6 +857,11 @@ def start_session_display(session_name, width=800, height=600):
     
     display = f":{display_num}"
     
+    # Get clean environment for X11 (without Wayland)
+    clean_env = get_clean_x11_env(display)
+    
+    print(f"[DEBUG] Starting X11 display: {display}, VNC port: {vnc_port}, WS port: {ws_port}")
+    
     try:
         # Start Xvfb
         xvfb_cmd = [
@@ -849,17 +870,22 @@ def start_session_display(session_name, width=800, height=600):
             "-ac",
             "+extension", "GLX"
         ]
+        print(f"[DEBUG] Running: {' '.join(xvfb_cmd)}")
         xvfb_proc = subprocess.Popen(
             xvfb_cmd,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            env=clean_env
         )
         time.sleep(0.5)
         
-        if xvfb_proc.poll() is not None:
-            return None, "Failed to start Xvfb"
+        poll_result = xvfb_proc.poll()
+        if poll_result is not None:
+            stdout, stderr = xvfb_proc.communicate()
+            return None, f"Failed to start Xvfb (exit code {poll_result}): {stderr.decode()}"
+        print(f"[DEBUG] Xvfb started, PID: {xvfb_proc.pid}")
         
-        # Start x11vnc
+        # Start x11vnc with clean environment (no Wayland)
         vnc_cmd = [
             "x11vnc",
             "-display", display,
@@ -871,16 +897,21 @@ def start_session_display(session_name, width=800, height=600):
             "-wait", "5",
             "-defer", "5"
         ]
+        print(f"[DEBUG] Running: {' '.join(vnc_cmd)}")
         vnc_proc = subprocess.Popen(
             vnc_cmd,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            env=clean_env
         )
         time.sleep(0.5)
         
-        if vnc_proc.poll() is not None:
+        poll_result = vnc_proc.poll()
+        if poll_result is not None:
+            stdout, stderr = vnc_proc.communicate()
             xvfb_proc.terminate()
-            return None, "Failed to start x11vnc"
+            return None, f"Failed to start x11vnc (exit code {poll_result}): {stderr.decode()}"
+        print(f"[DEBUG] x11vnc started, PID: {vnc_proc.pid}")
         
         # Start websockify
         ws_cmd = [
@@ -888,17 +919,21 @@ def start_session_display(session_name, width=800, height=600):
             str(ws_port),
             f"127.0.0.1:{vnc_port}"
         ]
+        print(f"[DEBUG] Running: {' '.join(ws_cmd)}")
         ws_proc = subprocess.Popen(
             ws_cmd,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE
         )
         time.sleep(0.3)
         
-        if ws_proc.poll() is not None:
+        poll_result = ws_proc.poll()
+        if poll_result is not None:
+            stdout, stderr = ws_proc.communicate()
             vnc_proc.terminate()
             xvfb_proc.terminate()
-            return None, "Failed to start websockify"
+            return None, f"Failed to start websockify (exit code {poll_result}): {stderr.decode()}"
+        print(f"[DEBUG] websockify started, PID: {ws_proc.pid}")
         
         # Set DISPLAY environment in the tmux session
         run_tmux("set-environment", "-t", full_name, "DISPLAY", display)
@@ -934,6 +969,8 @@ def start_session_display(session_name, width=800, height=600):
             'has_virtualgl': has_vgl
         }
         
+        print(f"[DEBUG] Session display started successfully")
+        
         return {
             'session': full_name,
             'display': display,
@@ -945,6 +982,8 @@ def start_session_display(session_name, width=800, height=600):
         }, None
         
     except Exception as e:
+        import traceback
+        print(f"[DEBUG] Exception: {traceback.format_exc()}")
         return None, str(e)
 
 
@@ -1176,6 +1215,7 @@ def stop_session_display_endpoint(session):
 def cleanup():
     print("\nCleaning up...")
     cleanup_x11_apps()
+    cleanup_session_displays()
     for session_name in list(pty_connections.keys()):
         cleanup_pty_connection(session_name)
 
@@ -1186,10 +1226,11 @@ if __name__ == '__main__':
     
     print(f"""
 ╔══════════════════════════════════════════════════════════════════╗
-║         Tmux Control Panel v2 - Direct PTY Edition               ║
+║         Tmux Control Panel v3 - Direct PTY Edition               ║
 ╠══════════════════════════════════════════════════════════════════╣
 ║  • WebSocket for real-time bidirectional communication           ║
 ║  • Direct PTY streaming (more reliable than pipe-pane)           ║
+║  • X11 GUI support via Xvfb + x11vnc + websockify                ║
 ║  • Still uses tmux backend - attach anytime with:                ║
 ║      tmux -L {TMUX_SOCKET} attach -t <session>               
 ╚══════════════════════════════════════════════════════════════════╝

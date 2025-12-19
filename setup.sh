@@ -1,63 +1,38 @@
 #!/bin/bash
-# Setup script for Tmux Control Panel v3
+
+# setup.sh - Install dependencies for ccpan (xeyes branch)
+# Ubuntu only
 
 set -e
 
-echo "🖥️  Setting up Tmux Control Panel v3..."
+echo "Installing system dependencies..."
+sudo apt-get update
+sudo apt-get install -y \
+    tmux \
+    python3 \
+    python3-pip \
+    python3-venv \
+    x11vnc \
+    xvfb \
+    xauth \
+    x11-apps \
+    websockify \
+    novnc
 
-sudo apt install xvfb x11vnc websockify
-
-# Check for Python
-if ! command -v python3 &> /dev/null; then
-    echo "❌ Python 3 is required but not installed."
-    exit 1
-fi
-
-# Check for tmux
-if ! command -v tmux &> /dev/null; then
-    echo "❌ tmux is required but not installed."
-    echo "   Install with: sudo apt install tmux"
-    exit 1
-fi
-
-# Check for X11 dependencies (optional)
 echo ""
-echo "Checking X11 dependencies for GUI app support..."
-MISSING=""
-if ! command -v Xvfb &> /dev/null; then
-    MISSING="$MISSING xvfb"
-fi
-if ! command -v x11vnc &> /dev/null; then
-    MISSING="$MISSING x11vnc"
-fi
-if ! command -v websockify &> /dev/null; then
-    MISSING="$MISSING websockify"
-fi
-
-if [ -n "$MISSING" ]; then
-    echo "⚠️  Optional X11 dependencies missing:$MISSING"
-    echo "   Install with: sudo apt install$MISSING novnc"
-    echo "   (GUI app features will be disabled without these)"
-else
-    echo "✅ X11 dependencies found"
-fi
-
-# Create virtual environment
-echo ""
-echo "Creating Python virtual environment..."
+echo "Setting up Python virtual environment..."
 python3 -m venv venv
-
-# Activate and install dependencies
-echo "Installing Python dependencies..."
 source venv/bin/activate
 pip install --upgrade pip
 pip install -r requirements.txt
 
 echo ""
-echo "✅ Setup complete!"
+echo "Verifying installation..."
+echo -n "x11vnc: "; x11vnc -version 2>&1 | head -1 || echo "NOT FOUND"
+echo -n "Xvfb: "; which Xvfb || echo "NOT FOUND"
+echo -n "websockify: "; which websockify || echo "NOT FOUND"
+echo -n "xeyes: "; which xeyes || echo "NOT FOUND"
+
 echo ""
-echo "To start the server:"
-echo "  source venv/bin/activate"
-echo "  python server_pty.py"
-echo ""
-echo "Then open http://127.0.0.1:5000 in your browser"
+echo "Setup complete!"
+echo "Run: source venv/bin/activate && python server.py"
