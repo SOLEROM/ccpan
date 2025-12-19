@@ -2,7 +2,7 @@
    Tmux Control Panel v4 - Industrial Terminal Aesthetic
    ============================================================================ */
 
-:root {
+   :root {
     /* Core palette - inspired by CRT monitors and industrial equipment */
     --bg-primary: #0a0c0f;
     --bg-secondary: #12151a;
@@ -42,6 +42,9 @@
     --radius-sm: 4px;
     --radius-md: 6px;
     --radius-lg: 8px;
+    
+    /* Resizer */
+    --resizer-size: 6px;
 }
 
 /* ============================================================================
@@ -54,11 +57,15 @@
     padding: 0;
 }
 
+html, body {
+    height: 100%;
+    overflow: hidden;
+}
+
 body {
     font-family: var(--font-ui);
     background: var(--bg-primary);
     color: var(--text-primary);
-    min-height: 100vh;
     display: flex;
     flex-direction: column;
     line-height: 1.5;
@@ -78,7 +85,7 @@ body {
     justify-content: space-between;
     gap: var(--spacing-lg);
     flex-shrink: 0;
-    height: 56px;
+    height: 52px;
 }
 
 .header__brand {
@@ -178,6 +185,7 @@ body {
     display: flex;
     flex: 1;
     overflow: hidden;
+    min-height: 0; /* Important for flex children to shrink */
 }
 
 /* ============================================================================
@@ -191,6 +199,7 @@ body {
     display: flex;
     flex-direction: column;
     flex-shrink: 0;
+    overflow-y: auto;
 }
 
 .sidebar__section {
@@ -320,6 +329,7 @@ body {
     flex-direction: column;
     overflow: hidden;
     background: var(--bg-primary);
+    min-width: 0; /* Important for flex children to shrink */
 }
 
 /* Layout Controls */
@@ -332,6 +342,7 @@ body {
     justify-content: space-between;
     gap: var(--spacing-lg);
     flex-shrink: 0;
+    height: 44px;
 }
 
 .layout-controls {
@@ -385,7 +396,8 @@ body {
     display: flex;
     overflow: hidden;
     padding: var(--spacing-sm);
-    gap: var(--spacing-sm);
+    gap: 0; /* No gap - resizers handle spacing */
+    min-height: 0; /* Important for flex children to shrink */
 }
 
 /* Layout modes */
@@ -401,7 +413,40 @@ body {
     flex-direction: column;
 }
 
-/* Terminal Panel */
+/* ============================================================================
+   Resizer
+   ============================================================================ */
+
+.resizer {
+    flex-shrink: 0;
+    background: var(--border-primary);
+    transition: background 0.15s;
+}
+
+.resizer:hover {
+    background: var(--accent-blue);
+}
+
+.resizer--horizontal {
+    width: var(--resizer-size);
+    cursor: col-resize;
+    margin: 0 2px;
+}
+
+.resizer--vertical {
+    height: var(--resizer-size);
+    cursor: row-resize;
+    margin: 2px 0;
+}
+
+.resizer--active {
+    background: var(--accent-blue);
+}
+
+/* ============================================================================
+   Terminal Panel
+   ============================================================================ */
+
 .terminal-panel {
     flex: 1;
     display: flex;
@@ -410,8 +455,8 @@ body {
     border: 1px solid var(--border-primary);
     border-radius: var(--radius-md);
     overflow: hidden;
-    min-width: 0;
-    min-height: 0;
+    min-width: 200px;
+    min-height: 150px;
 }
 
 .terminal-panel__header {
@@ -442,6 +487,7 @@ body {
     padding: 2px;
     overflow: hidden;
     position: relative;
+    min-height: 0; /* Important for flex children to shrink */
 }
 
 .terminal-panel__placeholder {
@@ -472,6 +518,7 @@ body {
     padding: var(--spacing-sm) var(--spacing-md);
     background: var(--bg-secondary);
     border-top: 1px solid var(--border-primary);
+    flex-shrink: 0;
 }
 
 .quick-commands__label {
@@ -483,7 +530,10 @@ body {
     margin-right: var(--spacing-sm);
 }
 
-/* GUI Display Panel */
+/* ============================================================================
+   GUI Display Panel
+   ============================================================================ */
+
 .gui-panel {
     display: flex;
     flex-direction: column;
@@ -491,8 +541,8 @@ body {
     border: 1px solid var(--border-primary);
     border-radius: var(--radius-md);
     overflow: hidden;
-    min-width: 300px;
-    min-height: 200px;
+    min-width: 200px;
+    min-height: 150px;
 }
 
 .gui-panel__header {
@@ -535,6 +585,7 @@ body {
     justify-content: center;
     background: var(--terminal-bg);
     overflow: hidden;
+    min-height: 0; /* Important for flex children to shrink */
 }
 
 .gui-panel__placeholder {
@@ -754,6 +805,7 @@ body {
 
 .xterm {
     padding: 4px;
+    height: 100%;
 }
 
 .xterm-viewport::-webkit-scrollbar {
@@ -829,4 +881,23 @@ body {
     display: flex;
     align-items: center;
     justify-content: center;
+}
+
+/* Prevent text selection during resize */
+.resizing {
+    user-select: none;
+    cursor: col-resize;
+}
+
+.resizing * {
+    cursor: col-resize !important;
+}
+
+.resizing-v {
+    user-select: none;
+    cursor: row-resize;
+}
+
+.resizing-v * {
+    cursor: row-resize !important;
 }

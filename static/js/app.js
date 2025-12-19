@@ -30,11 +30,29 @@ const state = {
     
     // Layout: 'terminals-only', 'split-1', 'split-2', 'split-3'
     layout: 'terminals-only',
+    
+    // GUI Panels - persist connections across layout changes
     guiPanels: [
         { displayNum: null, rfb: null, visible: false },
         { displayNum: null, rfb: null, visible: false },
         { displayNum: null, rfb: null, visible: false }
-    ]
+    ],
+    
+    // Panel sizes (percentages)
+    panelSizes: {
+        terminal: 50,
+        gui: [50, 50, 50]
+    },
+    
+    // Resizing state
+    resizing: {
+        active: false,
+        startX: 0,
+        startY: 0,
+        startSize: 0,
+        element: null,
+        direction: 'horizontal'
+    }
 };
 
 // ============================================================================
@@ -120,26 +138,34 @@ function connectWebSocket() {
     });
     
     state.socket.on('connect', () => {
+        console.log('WebSocket connected');
         updateStatus('connected');
         refreshSessions();
         refreshDisplays();
     });
     
-    state.socket.on('disconnect', () => updateStatus('disconnected'));
-    state.socket.on('connect_error', () => updateStatus('error'));
+    state.socket.on('disconnect', () => {
+        console.log('WebSocket disconnected');
+        updateStatus('disconnected');
+    });
+    
+    state.socket.on('connect_error', (err) => {
+        console.error('WebSocket connection error:', err);
+        updateStatus('error');
+    });
     
     state.socket.on('subscribed', (data) => {
+        console.log('Subscribed to session:', data.session);
         if (state.terminal) {
             state.terminal.clear();
             state.terminal.reset();
         }
         setTimeout(() => {
-            if (state.socket?.connected && state.terminal) {
+            if (state.socket && state.socket.connected && state.terminal) {
                 state.socket.emit('resize', {
                     session: data.session,
                     cols: state.terminal.cols,
-                    rows: state.terminal.rows,
-                    socket: state.config.tmuxSocket
+                    rows: state.terminal.rows
                 });
             }
         }, 100);
@@ -149,6 +175,10 @@ function connectWebSocket() {
         if (state.terminal && data.session === state.currentSession) {
             state.terminal.write(data.data);
         }
+    });
+    
+    state.socket.on('error', (data) => {
+        console.error('Server error:', data.message);
     });
 }
 
@@ -206,7 +236,7 @@ function initTerminal() {
     state.terminal.loadAddon(new WebLinksAddon.WebLinksAddon());
     
     state.terminal.onData((data) => {
-        if (state.currentSession && state.socket?.connected) {
+        if (state.currentSession && state.socket && state.socket.connected) {
             if (state.inCopyMode) {
                 state.socket.emit('scroll', { session: state.currentSession, command: 'exit' });
                 state.inCopyMode = false;
@@ -216,7 +246,7 @@ function initTerminal() {
     });
     
     state.terminal.onResize(({ cols, rows }) => {
-        if (state.currentSession && state.socket?.connected) {
+        if (state.currentSession && state.socket && state.socket.connected) {
             state.socket.emit('resize', { session: state.currentSession, cols, rows });
         }
     });
@@ -229,7 +259,7 @@ function attachTerminal() {
     
     dom.terminalContainer.addEventListener('wheel', (e) => {
         e.preventDefault();
-        if (!state.currentSession || !state.socket?.connected) return;
+        if (!state.currentSession || !state.socket || !state.socket.connected) return;
         
         const scrollUp = e.deltaY < 0;
         const lines = Math.max(1, Math.abs(Math.round(e.deltaY / 30)));
@@ -289,7 +319,7 @@ function renderSessionList() {
 }
 
 async function selectSession(session) {
-    if (state.currentSession && state.socket?.connected) {
+    if (state.currentSession && state.socket && state.socket.connected) {
         state.socket.emit('unsubscribe', { session: state.currentSession });
     }
     
@@ -304,7 +334,7 @@ async function selectSession(session) {
     
     setTimeout(() => {
         state.fitAddon.fit();
-        if (state.socket?.connected) {
+        if (state.socket && state.socket.connected) {
             state.socket.emit('subscribe', {
                 session: session,
                 cols: state.terminal.cols,
@@ -362,13 +392,13 @@ async function deleteSession(session) {
 // ============================================================================
 
 function sendSignal(sig) {
-    if (state.currentSession && state.socket?.connected) {
+    if (state.currentSession && state.socket && state.socket.connected) {
         state.socket.emit('signal', { session: state.currentSession, signal: sig });
     }
 }
 
 function clearTerminal() {
-    if (state.currentSession && state.socket?.connected) {
+    if (state.currentSession && state.socket && state.socket.connected) {
         state.socket.emit('input', { session: state.currentSession, keys: 'clear\r' });
     }
 }
@@ -486,7 +516,7 @@ async function createDisplay() {
         
         if (data.status === 'error') {
             if (data.message.includes('Missing dependencies')) {
-                alert(`GUI requires X11 packages:\n\nsudo apt install xvfb x11vnc websockify`);
+                alert('GUI requires X11 packages:\n\nsudo apt install xvfb x11vnc websockify');
             } else {
                 alert('Failed: ' + data.message);
             }
@@ -501,10 +531,10 @@ async function createDisplay() {
 }
 
 async function deleteDisplay(displayNum) {
-    if (!confirm(`Stop display :${displayNum}?`)) return;
+    if (!confirm('Stop display :' + displayNum + '?')) return;
     
     try {
-        await fetch(`/api/x11/displays/${displayNum}`, { method: 'DELETE' });
+        await fetch('/api/x11/displays/' + displayNum, { method: 'DELETE' });
         
         // Disconnect any GUI panels using this display
         state.guiPanels.forEach((panel, i) => {
@@ -531,6 +561,9 @@ function setLayout(layout) {
         btn.classList.toggle('layout-btn--active', btn.dataset.layout === layout);
     });
     
+    // Clear resizers first
+    document.querySelectorAll('.resizer').forEach(r => r.remove());
+    
     // Update workspace class
     dom.workspaceContent.className = 'workspace__content';
     
@@ -538,16 +571,32 @@ function setLayout(layout) {
     
     if (layout === 'terminals-only') {
         dom.workspaceContent.classList.add('workspace__content--terminals-only');
-        state.guiPanels.forEach((_, i) => hideGuiPanel(i));
+        // Just hide GUI panels visually, don't disconnect
+        state.guiPanels.forEach((_, i) => {
+            dom.guiPanels[i].classList.add('gui-panel--hidden');
+            state.guiPanels[i].visible = false;
+        });
+        // Terminal takes full width
+        dom.terminalPanel.style.flex = '1';
     } else {
         dom.workspaceContent.classList.add('workspace__content--split-h');
+        
+        // Show/hide panels based on count
         for (let i = 0; i < 3; i++) {
             if (i < guiCount) {
-                showGuiPanel(i);
+                dom.guiPanels[i].classList.remove('gui-panel--hidden');
+                state.guiPanels[i].visible = true;
             } else {
-                hideGuiPanel(i);
+                dom.guiPanels[i].classList.add('gui-panel--hidden');
+                state.guiPanels[i].visible = false;
             }
         }
+        
+        // Add resizers between panels
+        addResizers(guiCount);
+        
+        // Set initial sizes
+        applyPanelSizes(guiCount);
     }
     
     // Refit terminal
@@ -556,21 +605,131 @@ function setLayout(layout) {
     }, 100);
 }
 
-function showGuiPanel(index) {
-    const panel = dom.guiPanels[index];
-    if (panel) {
-        panel.classList.remove('gui-panel--hidden');
-        state.guiPanels[index].visible = true;
+function addResizers(guiCount) {
+    // Add resizer after terminal panel
+    const resizer1 = document.createElement('div');
+    resizer1.className = 'resizer resizer--horizontal';
+    resizer1.dataset.index = '0';
+    dom.terminalPanel.after(resizer1);
+    
+    // Add resizers between GUI panels
+    for (let i = 0; i < guiCount - 1; i++) {
+        const resizer = document.createElement('div');
+        resizer.className = 'resizer resizer--horizontal';
+        resizer.dataset.index = String(i + 1);
+        dom.guiPanels[i].after(resizer);
+    }
+    
+    // Setup resizer event handlers
+    setupResizers();
+}
+
+function applyPanelSizes(guiCount) {
+    const totalPanels = 1 + guiCount;
+    const equalSize = 100 / totalPanels;
+    
+    dom.terminalPanel.style.flex = '0 0 ' + state.panelSizes.terminal + '%';
+    
+    for (let i = 0; i < guiCount; i++) {
+        dom.guiPanels[i].style.flex = '0 0 ' + (state.panelSizes.gui[i] || equalSize) + '%';
     }
 }
 
-function hideGuiPanel(index) {
-    const panel = dom.guiPanels[index];
-    if (panel) {
-        panel.classList.add('gui-panel--hidden');
-        state.guiPanels[index].visible = false;
-        disconnectGuiPanel(index);
+function setupResizers() {
+    document.querySelectorAll('.resizer').forEach(resizer => {
+        resizer.addEventListener('mousedown', startResize);
+    });
+}
+
+function startResize(e) {
+    e.preventDefault();
+    
+    const resizer = e.target;
+    const index = parseInt(resizer.dataset.index);
+    
+    // Determine which panels we're resizing between
+    let leftPanel, rightPanel;
+    if (index === 0) {
+        leftPanel = dom.terminalPanel;
+        // Find first visible GUI panel
+        rightPanel = dom.guiPanels.find((p, i) => state.guiPanels[i].visible);
+    } else {
+        leftPanel = dom.guiPanels[index - 1];
+        rightPanel = dom.guiPanels[index];
     }
+    
+    if (!leftPanel || !rightPanel) return;
+    
+    const containerRect = dom.workspaceContent.getBoundingClientRect();
+    const leftRect = leftPanel.getBoundingClientRect();
+    const rightRect = rightPanel.getBoundingClientRect();
+    
+    state.resizing = {
+        active: true,
+        startX: e.clientX,
+        leftPanel,
+        rightPanel,
+        leftStartWidth: leftRect.width,
+        rightStartWidth: rightRect.width,
+        containerWidth: containerRect.width,
+        index
+    };
+    
+    document.body.classList.add('resizing');
+    resizer.classList.add('resizer--active');
+    
+    document.addEventListener('mousemove', doResize);
+    document.addEventListener('mouseup', stopResize);
+}
+
+function doResize(e) {
+    if (!state.resizing.active) return;
+    
+    const r = state.resizing;
+    const delta = e.clientX - r.startX;
+    
+    const newLeftWidth = r.leftStartWidth + delta;
+    const newRightWidth = r.rightStartWidth - delta;
+    
+    // Minimum sizes
+    const minSize = 150;
+    if (newLeftWidth < minSize || newRightWidth < minSize) return;
+    
+    // Convert to percentages
+    const leftPercent = (newLeftWidth / r.containerWidth) * 100;
+    const rightPercent = (newRightWidth / r.containerWidth) * 100;
+    
+    r.leftPanel.style.flex = '0 0 ' + leftPercent + '%';
+    r.rightPanel.style.flex = '0 0 ' + rightPercent + '%';
+    
+    // Save sizes
+    if (r.index === 0) {
+        state.panelSizes.terminal = leftPercent;
+        const guiIndex = dom.guiPanels.findIndex(p => p === r.rightPanel);
+        if (guiIndex >= 0) state.panelSizes.gui[guiIndex] = rightPercent;
+    } else {
+        state.panelSizes.gui[r.index - 1] = leftPercent;
+        state.panelSizes.gui[r.index] = rightPercent;
+    }
+    
+    // Refit terminal during resize
+    if (state.fitAddon) state.fitAddon.fit();
+}
+
+function stopResize() {
+    if (!state.resizing.active) return;
+    
+    state.resizing.active = false;
+    document.body.classList.remove('resizing');
+    document.querySelectorAll('.resizer--active').forEach(r => r.classList.remove('resizer--active'));
+    
+    document.removeEventListener('mousemove', doResize);
+    document.removeEventListener('mouseup', stopResize);
+    
+    // Final terminal fit
+    setTimeout(() => {
+        if (state.fitAddon) state.fitAddon.fit();
+    }, 50);
 }
 
 // ============================================================================
@@ -580,12 +739,15 @@ function hideGuiPanel(index) {
 async function connectGuiPanel(panelIndex, displayNum) {
     const display = state.displays.find(d => d.display_num === displayNum);
     if (!display) {
-        alert(`Display :${displayNum} not found. Create it first.`);
+        alert('Display :' + displayNum + ' not found. Create it first.');
         return;
     }
     
-    // Disconnect existing
-    disconnectGuiPanel(panelIndex);
+    // Disconnect existing connection for this panel
+    if (state.guiPanels[panelIndex].rfb) {
+        state.guiPanels[panelIndex].rfb.disconnect();
+        state.guiPanels[panelIndex].rfb = null;
+    }
     
     state.guiPanels[panelIndex].displayNum = displayNum;
     
@@ -593,23 +755,23 @@ async function connectGuiPanel(panelIndex, displayNum) {
     const body = panel.querySelector('.gui-panel__body');
     const titleSpan = panel.querySelector('.gui-panel__display-num');
     
-    titleSpan.textContent = `:${displayNum}`;
+    titleSpan.textContent = ':' + displayNum;
     body.innerHTML = '<div style="color: var(--text-muted);">Connecting...</div>';
     
     try {
         const RFB = (await import('https://cdn.jsdelivr.net/npm/@novnc/novnc@1.4.0/core/rfb.js')).default;
-        const wsUrl = `ws://${window.location.hostname}:${display.ws_port}`;
+        const wsUrl = 'ws://' + window.location.hostname + ':' + display.ws_port;
         
         body.innerHTML = '';
         const rfb = new RFB(body, wsUrl, { scaleViewport: true, resizeSession: false });
         
-        rfb.addEventListener('connect', () => console.log(`GUI Panel ${panelIndex + 1} connected`));
-        rfb.addEventListener('disconnect', () => console.log(`GUI Panel ${panelIndex + 1} disconnected`));
+        rfb.addEventListener('connect', () => console.log('GUI Panel ' + (panelIndex + 1) + ' connected to :' + displayNum));
+        rfb.addEventListener('disconnect', () => console.log('GUI Panel ' + (panelIndex + 1) + ' disconnected'));
         
         state.guiPanels[panelIndex].rfb = rfb;
     } catch (error) {
         console.error('VNC connection failed:', error);
-        body.innerHTML = `<div style="color: var(--accent-red);">Connection failed</div>`;
+        body.innerHTML = '<div style="color: var(--accent-red);">Connection failed</div>';
     }
 }
 
@@ -626,22 +788,16 @@ function disconnectGuiPanel(panelIndex) {
         const body = panel.querySelector('.gui-panel__body');
         const titleSpan = panel.querySelector('.gui-panel__display-num');
         titleSpan.textContent = 'Not connected';
-        body.innerHTML = `
-            <div class="gui-panel__placeholder">
-                <div class="gui-panel__placeholder-icon">🖼️</div>
-                <div class="gui-panel__placeholder-text">Click "Connect" to attach a display</div>
-            </div>
-        `;
+        body.innerHTML = '<div class="gui-panel__placeholder"><div class="gui-panel__placeholder-icon">🖼️</div><div class="gui-panel__placeholder-text">Click "Connect" to attach a display</div></div>';
     }
 }
 
 function showConnectDisplayModal(panelIndex) {
     window.currentConnectPanelIndex = panelIndex;
     
-    // Populate display options
     const select = document.getElementById('connectDisplaySelect');
     select.innerHTML = state.displays.map(d => 
-        `<option value="${d.display_num}">${d.display} (${d.width}×${d.height})</option>`
+        '<option value="' + d.display_num + '">' + d.display + ' (' + d.width + '×' + d.height + ')</option>'
     ).join('');
     
     if (state.displays.length === 0) {
@@ -674,8 +830,13 @@ async function bindDisplayToSession(displayNum) {
         return;
     }
     
+    if (!displayNum) {
+        alert('Connect this panel to a display first');
+        return;
+    }
+    
     try {
-        const response = await fetch(`/api/sessions/${state.currentSession}/bind-display`, {
+        const response = await fetch('/api/sessions/' + state.currentSession + '/bind-display', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ display_num: displayNum })
@@ -683,7 +844,7 @@ async function bindDisplayToSession(displayNum) {
         const data = await response.json();
         
         if (data.status === 'ok') {
-            alert(`Display :${displayNum} bound to ${state.currentSession}\nDISPLAY variable is now set.`);
+            alert('Display :' + displayNum + ' bound to ' + state.currentSession + '\nDISPLAY variable is now set.');
         } else {
             alert('Failed: ' + data.message);
         }
@@ -698,7 +859,7 @@ async function bindDisplayToSession(displayNum) {
 
 function showModal(id) {
     document.getElementById(id).classList.add('modal-overlay--visible');
-    const firstInput = document.querySelector(`#${id} input`);
+    const firstInput = document.querySelector('#' + id + ' input');
     if (firstInput) setTimeout(() => firstInput.focus(), 100);
 }
 

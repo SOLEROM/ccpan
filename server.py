@@ -12,9 +12,8 @@ import atexit
 import warnings
 
 # Add the script's directory to Python path for module imports
-SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-if SCRIPT_DIR not in sys.path:
-    sys.path.insert(0, SCRIPT_DIR)
+SCRIPT_DIR = os.path.dirname(os.path.realpath(__file__))
+sys.path.insert(0, SCRIPT_DIR)
 
 # Try to use eventlet for better WebSocket support (suppress deprecation warning)
 warnings.filterwarnings('ignore', category=DeprecationWarning, module='eventlet')
