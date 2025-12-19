@@ -370,7 +370,7 @@
 </head>
 <body>
     <header>
-        <h1>🖥️ Tmux Control Panel v2</h1>
+        <h1>🖥️ Tmux Control Panel v3</h1>
         <div class="status-indicator">
             <span class="status-dot" id="statusDot"></span>
             <span id="statusText">Disconnected</span>
@@ -388,6 +388,17 @@
             <div class="session-list" id="sessionList">
                 <!-- Sessions will be populated here -->
             </div>
+            
+            <!-- X11 Apps Section -->
+            <div class="sidebar-header" style="margin-top: 20px; border-top: 1px solid #30363d; padding-top: 16px;">
+                <h2>🖼️ GUI Apps</h2>
+                <button class="btn btn-primary" style="width: 100%;" onclick="showX11Modal()">
+                    <span>+</span> Launch App
+                </button>
+            </div>
+            <div class="session-list" id="x11AppList">
+                <!-- X11 apps will be listed here -->
+            </div>
         </aside>
         
         <main class="terminal-container" id="terminalContainer">
@@ -402,6 +413,9 @@
                 <div class="terminal-header">
                     <span class="terminal-title" id="terminalTitle">Session</span>
                     <div class="terminal-controls">
+                        <button class="btn btn-primary btn-sm" id="guiToggleBtn" onclick="toggleSessionDisplay()" title="Enable GUI apps in this session">
+                            🖼️ Enable GUI
+                        </button>
                         <button class="btn btn-secondary btn-sm" onclick="sendSignal('SIGINT')" title="Send Ctrl+C">
                             ⏹ Stop
                         </button>
@@ -426,6 +440,60 @@
                     <button class="btn btn-secondary btn-sm" onclick="showAddCommandModal()">
                         + Add
                     </button>
+                </div>
+            </div>
+            
+            <!-- Session X11 GUI Panel -->
+            <div id="sessionX11Panel" style="display: none; border-top: 2px solid #30363d; background: #161b22; padding: 16px; margin-top: 10px;">
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
+                    <h3 style="margin: 0; color: #58a6ff;">🖼️ Session GUI Display <span id="sessionDisplayInfo" style="font-size: 12px; color: #8b949e;"></span></h3>
+                    <div>
+                        <select id="displaySizeSelect" onchange="resizeSessionDisplay()" style="padding: 4px 8px; border-radius: 4px; background: #21262d; color: #c9d1d9; border: 1px solid #30363d; margin-right: 8px;">
+                            <option value="800x600">800×600</option>
+                            <option value="1024x768">1024×768</option>
+                            <option value="1280x800" selected>1280×800</option>
+                            <option value="1440x900">1440×900</option>
+                            <option value="1920x1080">1920×1080</option>
+                        </select>
+                        <button class="btn btn-secondary btn-sm" onclick="refreshSessionDisplay()" title="Refresh display">🔄</button>
+                        <button class="btn btn-danger btn-sm" onclick="disableSessionDisplay()">✕ Disable GUI</button>
+                    </div>
+                </div>
+                <details style="font-size: 13px; color: #8b949e; margin-bottom: 10px;">
+                    <summary style="cursor: pointer; color: #58a6ff;">💡 Tips for running GUI apps</summary>
+                    <div style="margin-top: 8px; padding: 10px; background: #21262d; border-radius: 6px;">
+                        <p style="margin: 0 0 8px 0;"><strong>Simple apps:</strong> <code>xeyes &</code>, <code>xclock &</code>, <code>xterm &</code></p>
+                        <p style="margin: 0 0 8px 0;"><strong>VS Code:</strong> <code>code --disable-gpu --ozone-platform=x11 . &</code></p>
+                        <p style="margin: 0 0 8px 0;"><strong>Firefox:</strong> <code>firefox --display=$DISPLAY &</code></p>
+                        <p style="margin: 0 0 8px 0;"><strong>Chrome:</strong> <code>google-chrome --disable-gpu --no-sandbox &</code></p>
+                        
+                        <div style="margin-top: 10px; padding: 8px; background: #1a1e24; border-radius: 4px; border-left: 3px solid #58a6ff;">
+                            <strong>🎮 3D/OpenGL apps:</strong><br>
+                            Software rendering is enabled (slow but works). For better performance with 3D apps like FlightGear:<br>
+                            <code style="display: block; margin-top: 4px;">sudo apt install virtualgl</code>
+                            Then run: <code>vglrun fgfs &</code><br>
+                            <small style="color: #6e7681;">Or use: <code>LIBGL_ALWAYS_SOFTWARE=1 fgfs &</code> for software rendering</small>
+                        </div>
+                        
+                        <p style="margin: 10px 0 0 0; padding: 8px; background: #1a1e24; border-radius: 4px;">
+                            <strong>⚠️ Note:</strong> If app opens on your main screen instead, start a <strong>new terminal tab</strong> in your session 
+                            (the DISPLAY variable is set when GUI is enabled). Or manually run: <code>export DISPLAY=<span id="currentDisplay">:99</span></code>
+                        </p>
+                    </div>
+                </details>
+                <div id="sessionX11Container" style="width: 100%; display: flex; justify-content: center; background: #0d1117; border-radius: 6px; overflow: hidden; min-height: 200px;">
+                    <!-- noVNC canvas will be inserted here -->
+                </div>
+            </div>
+            
+            <!-- Standalone X11 GUI Panel (for launched apps) -->
+            <div id="x11Panel" style="display: none; border-top: 2px solid #30363d; background: #161b22; padding: 16px; margin-top: 10px;">
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
+                    <h3 style="margin: 0; color: #58a6ff;">🖼️ <span id="x11PanelTitle">GUI App</span></h3>
+                    <button class="btn btn-danger btn-sm" onclick="closeX11Panel()">✕ Close</button>
+                </div>
+                <div id="x11Container" style="width: 100%; display: flex; justify-content: center; background: #0d1117; border-radius: 6px; overflow: hidden;">
+                    <!-- noVNC canvas will be inserted here -->
                 </div>
             </div>
         </main>
@@ -475,6 +543,37 @@
             </div>
         </div>
     </div>
+    
+    <!-- X11 App Modal -->
+    <div class="modal-overlay" id="x11Modal">
+        <div class="modal">
+            <h3>🖼️ Launch GUI Application</h3>
+            <div id="x11DepsWarning" style="display: none; background: #3d1f1f; border: 1px solid #f85149; padding: 12px; border-radius: 6px; margin-bottom: 16px;">
+                <strong style="color: #f85149;">⚠️ Missing Dependencies</strong>
+                <p style="margin: 8px 0 0 0; color: #f0f0f0; font-size: 13px;" id="x11DepsMessage"></p>
+            </div>
+            <div class="form-group">
+                <label for="x11Command">Application Command</label>
+                <input type="text" id="x11Command" placeholder="xeyes" autocomplete="off">
+                <small>Examples: xeyes, xclock, xterm, firefox</small>
+            </div>
+            <div class="form-group">
+                <label>Window Size</label>
+                <div style="display: flex; gap: 10px;">
+                    <input type="number" id="x11Width" value="400" min="100" max="1920" style="flex: 1;">
+                    <span style="align-self: center;">×</span>
+                    <input type="number" id="x11Height" value="400" min="100" max="1080" style="flex: 1;">
+                </div>
+            </div>
+            <div class="modal-actions">
+                <button class="btn btn-secondary" onclick="hideX11Modal()">Cancel</button>
+                <button class="btn btn-primary" onclick="launchX11App()">Launch</button>
+            </div>
+        </div>
+    </div>
+    
+    <!-- noVNC scripts -->
+    <script src="https://cdn.jsdelivr.net/npm/@novnc/novnc@1.4.0/lib/rfb.js" type="module"></script>
 
     <script>
         // ========================================================================
@@ -761,6 +860,9 @@
                 socket.emit('unsubscribe', { session: currentSession });
             }
             
+            // Hide previous session's display
+            hideSessionDisplay();
+            
             currentSession = session;
             
             // Update UI
@@ -776,6 +878,9 @@
             
             // Render quick commands
             renderQuickCommands();
+            
+            // Check if this session has a GUI display
+            checkSessionDisplay();
             
             // Fit terminal, get size, THEN subscribe with correct dimensions
             setTimeout(() => {
@@ -1041,12 +1146,426 @@
         });
         
         // ========================================================================
+        // X11 GUI Apps
+        // ========================================================================
+        
+        let x11Apps = [];
+        let currentX11App = null;
+        let rfbConnection = null;
+        
+        async function checkX11Dependencies() {
+            try {
+                const response = await fetch('/api/x11/check');
+                const data = await response.json();
+                
+                const warning = document.getElementById('x11DepsWarning');
+                const message = document.getElementById('x11DepsMessage');
+                
+                if (data.status === 'missing') {
+                    warning.style.display = 'block';
+                    message.innerHTML = `Missing: ${data.missing.join(', ')}<br><code style="background: #21262d; padding: 4px 8px; border-radius: 4px; display: inline-block; margin-top: 8px;">${data.install_cmd}</code>`;
+                } else {
+                    warning.style.display = 'none';
+                }
+            } catch (error) {
+                console.error('Failed to check X11 dependencies:', error);
+            }
+        }
+        
+        function showX11Modal() {
+            checkX11Dependencies();
+            document.getElementById('x11Modal').classList.add('show');
+            document.getElementById('x11Command').focus();
+        }
+        
+        function hideX11Modal() {
+            document.getElementById('x11Modal').classList.remove('show');
+        }
+        
+        async function launchX11App() {
+            const command = document.getElementById('x11Command').value.trim();
+            const width = parseInt(document.getElementById('x11Width').value) || 400;
+            const height = parseInt(document.getElementById('x11Height').value) || 400;
+            
+            if (!command) {
+                alert('Please enter an application command');
+                return;
+            }
+            
+            try {
+                const response = await fetch('/api/x11/apps', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ command, width, height })
+                });
+                
+                const data = await response.json();
+                
+                if (data.status === 'error') {
+                    alert('Failed to launch app: ' + data.message);
+                    return;
+                }
+                
+                hideX11Modal();
+                await refreshX11Apps();
+                connectToX11App(data.app);
+                
+            } catch (error) {
+                console.error('Failed to launch X11 app:', error);
+                alert('Failed to launch X11 app');
+            }
+        }
+        
+        async function refreshX11Apps() {
+            try {
+                const response = await fetch('/api/x11/apps');
+                const data = await response.json();
+                x11Apps = data.apps || [];
+                renderX11AppList();
+            } catch (error) {
+                console.error('Failed to refresh X11 apps:', error);
+            }
+        }
+        
+        function renderX11AppList() {
+            const list = document.getElementById('x11AppList');
+            
+            if (x11Apps.length === 0) {
+                list.innerHTML = '<p style="padding: 16px; color: #8b949e; text-align: center; font-size: 13px;">No GUI apps running</p>';
+                return;
+            }
+            
+            list.innerHTML = x11Apps.map(app => `
+                <div class="session-item ${currentX11App === app.app_id ? 'active' : ''}" 
+                     onclick="connectToX11App(${JSON.stringify(app).replace(/"/g, '&quot;')})">
+                    <span class="session-name">🖼️ ${escapeHtml(app.command)}</span>
+                    <div class="session-actions">
+                        <button class="btn btn-danger btn-sm" onclick="event.stopPropagation(); stopX11App('${app.app_id}')">
+                            ×
+                        </button>
+                    </div>
+                </div>
+            `).join('');
+        }
+        
+        async function connectToX11App(app) {
+            currentX11App = app.app_id;
+            renderX11AppList();
+            
+            // Show X11 panel
+            document.getElementById('x11Panel').style.display = 'block';
+            document.getElementById('x11PanelTitle').textContent = app.command;
+            
+            const container = document.getElementById('x11Container');
+            container.innerHTML = '';
+            container.style.width = app.width + 'px';
+            container.style.height = app.height + 'px';
+            
+            // Disconnect existing connection
+            if (rfbConnection) {
+                rfbConnection.disconnect();
+                rfbConnection = null;
+            }
+            
+            // Connect via noVNC
+            try {
+                // Dynamic import for noVNC
+                const RFB = (await import('https://cdn.jsdelivr.net/npm/@novnc/novnc@1.4.0/core/rfb.js')).default;
+                
+                const wsUrl = `ws://${window.location.hostname}:${app.ws_port}`;
+                
+                rfbConnection = new RFB(container, wsUrl, {
+                    scaleViewport: false,
+                    resizeSession: false
+                });
+                
+                rfbConnection.addEventListener('connect', () => {
+                    console.log('Connected to VNC');
+                });
+                
+                rfbConnection.addEventListener('disconnect', (e) => {
+                    console.log('Disconnected from VNC:', e.detail);
+                });
+                
+                rfbConnection.addEventListener('credentialsrequired', () => {
+                    console.log('VNC credentials required');
+                });
+                
+            } catch (error) {
+                console.error('Failed to connect to X11 app:', error);
+                container.innerHTML = `<p style="color: #f85149; padding: 20px;">Failed to connect: ${error.message}</p>`;
+            }
+        }
+        
+        async function stopX11App(appId) {
+            if (!confirm('Stop this GUI application?')) return;
+            
+            try {
+                await fetch(`/api/x11/apps/${appId}`, { method: 'DELETE' });
+                
+                if (currentX11App === appId) {
+                    closeX11Panel();
+                }
+                
+                await refreshX11Apps();
+                
+            } catch (error) {
+                console.error('Failed to stop X11 app:', error);
+            }
+        }
+        
+        function closeX11Panel() {
+            if (rfbConnection) {
+                rfbConnection.disconnect();
+                rfbConnection = null;
+            }
+            currentX11App = null;
+            document.getElementById('x11Panel').style.display = 'none';
+            document.getElementById('x11Container').innerHTML = '';
+            renderX11AppList();
+        }
+        
+        // Handle Enter in X11 modal
+        document.getElementById('x11Command').addEventListener('keydown', (e) => {
+            if (e.key === 'Enter') launchX11App();
+        });
+        
+        // ========================================================================
+        // Session X11 Display
+        // ========================================================================
+        
+        let sessionDisplayInfo = null;
+        let sessionRfbConnection = null;
+        
+        let x11Available = null; // null = unknown, true/false = checked
+        
+        async function checkX11Available() {
+            try {
+                const response = await fetch('/api/x11/check');
+                const data = await response.json();
+                x11Available = (data.status === 'ok');
+                updateGuiButtonAvailability();
+            } catch (error) {
+                x11Available = false;
+            }
+        }
+        
+        function updateGuiButtonAvailability() {
+            const btn = document.getElementById('guiToggleBtn');
+            if (!btn) return;
+            
+            if (x11Available === false) {
+                btn.title = 'GUI requires: sudo apt install xvfb x11vnc websockify';
+                btn.style.opacity = '0.6';
+            } else {
+                btn.title = 'Enable GUI apps in this session';
+                btn.style.opacity = '1';
+            }
+        }
+        
+        async function checkSessionDisplay() {
+            if (!currentSession) return;
+            
+            try {
+                const response = await fetch(`/api/sessions/${currentSession}/display`);
+                const data = await response.json();
+                
+                if (data.status === 'ok' && data.display) {
+                    sessionDisplayInfo = data.display;
+                    updateGuiButton(true);
+                    showSessionDisplay();
+                } else {
+                    sessionDisplayInfo = null;
+                    updateGuiButton(false);
+                    hideSessionDisplay();
+                }
+            } catch (error) {
+                console.error('Failed to check session display:', error);
+            }
+        }
+        
+        function updateGuiButton(enabled) {
+            const btn = document.getElementById('guiToggleBtn');
+            if (enabled) {
+                btn.textContent = '🖼️ GUI Enabled';
+                btn.classList.remove('btn-primary');
+                btn.classList.add('btn-success');
+                btn.style.background = '#238636';
+            } else {
+                btn.textContent = '🖼️ Enable GUI';
+                btn.classList.remove('btn-success');
+                btn.classList.add('btn-primary');
+                btn.style.background = '';
+            }
+        }
+        
+        async function toggleSessionDisplay() {
+            if (!currentSession) return;
+            
+            if (sessionDisplayInfo) {
+                // Disable
+                await disableSessionDisplay();
+            } else {
+                // Enable
+                await enableSessionDisplay();
+            }
+        }
+        
+        async function enableSessionDisplay() {
+            if (!currentSession) return;
+            
+            // Get selected size from dropdown
+            const sizeSelect = document.getElementById('displaySizeSelect');
+            const [width, height] = (sizeSelect ? sizeSelect.value : '1280x800').split('x').map(Number);
+            
+            try {
+                const response = await fetch(`/api/sessions/${currentSession}/display`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ width, height })
+                });
+                
+                const data = await response.json();
+                
+                if (data.status === 'error') {
+                    // Check if it's a missing dependencies error
+                    if (data.message && data.message.includes('Missing dependencies')) {
+                        const installCmd = 'sudo apt install xvfb x11vnc websockify';
+                        if (confirm(`GUI requires X11 packages to be installed.\n\n${data.message}\n\nInstall command:\n${installCmd}\n\nCopy install command to clipboard?`)) {
+                            navigator.clipboard.writeText(installCmd).then(() => {
+                                alert('Command copied! Run it in your server terminal, then try again.');
+                            }).catch(() => {
+                                alert(`Please run this command on your server:\n\n${installCmd}`);
+                            });
+                        }
+                    } else {
+                        alert('Failed to enable GUI: ' + data.message);
+                    }
+                    return;
+                }
+                
+                sessionDisplayInfo = data.display;
+                updateGuiButton(true);
+                showSessionDisplay();
+                
+            } catch (error) {
+                console.error('Failed to enable session display:', error);
+                alert('Failed to enable GUI display');
+            }
+        }
+        
+        async function resizeSessionDisplay() {
+            if (!currentSession || !sessionDisplayInfo) return;
+            
+            // Need to restart display with new size
+            await disableSessionDisplay();
+            await enableSessionDisplay();
+        }
+        
+        async function disableSessionDisplay() {
+            if (!currentSession) return;
+            
+            try {
+                await fetch(`/api/sessions/${currentSession}/display`, { method: 'DELETE' });
+                
+                sessionDisplayInfo = null;
+                updateGuiButton(false);
+                hideSessionDisplay();
+                
+            } catch (error) {
+                console.error('Failed to disable session display:', error);
+            }
+        }
+        
+        async function showSessionDisplay() {
+            if (!sessionDisplayInfo) return;
+            
+            const panel = document.getElementById('sessionX11Panel');
+            const container = document.getElementById('sessionX11Container');
+            const info = document.getElementById('sessionDisplayInfo');
+            const sizeSelect = document.getElementById('displaySizeSelect');
+            
+            panel.style.display = 'block';
+            info.textContent = `(${sessionDisplayInfo.display} - ${sessionDisplayInfo.width}x${sessionDisplayInfo.height})`;
+            
+            // Update dropdown to reflect current size
+            if (sizeSelect) {
+                const currentSize = `${sessionDisplayInfo.width}x${sessionDisplayInfo.height}`;
+                for (let option of sizeSelect.options) {
+                    if (option.value === currentSize) {
+                        sizeSelect.value = currentSize;
+                        break;
+                    }
+                }
+            }
+            
+            // Update the display number in tips
+            const displaySpan = document.getElementById('currentDisplay');
+            if (displaySpan) {
+                displaySpan.textContent = sessionDisplayInfo.display;
+            }
+            
+            container.style.width = sessionDisplayInfo.width + 'px';
+            container.style.height = sessionDisplayInfo.height + 'px';
+            container.innerHTML = '<p style="color: #8b949e; padding: 40px; text-align: center;">Connecting to display...</p>';
+            
+            // Disconnect existing connection
+            if (sessionRfbConnection) {
+                sessionRfbConnection.disconnect();
+                sessionRfbConnection = null;
+            }
+            
+            // Connect via noVNC
+            try {
+                const RFB = (await import('https://cdn.jsdelivr.net/npm/@novnc/novnc@1.4.0/core/rfb.js')).default;
+                
+                const wsUrl = `ws://${window.location.hostname}:${sessionDisplayInfo.ws_port}`;
+                
+                container.innerHTML = '';
+                
+                sessionRfbConnection = new RFB(container, wsUrl, {
+                    scaleViewport: false,
+                    resizeSession: false
+                });
+                
+                sessionRfbConnection.addEventListener('connect', () => {
+                    console.log('Connected to session VNC');
+                });
+                
+                sessionRfbConnection.addEventListener('disconnect', (e) => {
+                    console.log('Disconnected from session VNC:', e.detail);
+                });
+                
+            } catch (error) {
+                console.error('Failed to connect to session display:', error);
+                container.innerHTML = `<p style="color: #f85149; padding: 20px;">Failed to connect: ${error.message}</p>`;
+            }
+        }
+        
+        function hideSessionDisplay() {
+            if (sessionRfbConnection) {
+                sessionRfbConnection.disconnect();
+                sessionRfbConnection = null;
+            }
+            document.getElementById('sessionX11Panel').style.display = 'none';
+            document.getElementById('sessionX11Container').innerHTML = '';
+        }
+        
+        function refreshSessionDisplay() {
+            if (sessionDisplayInfo) {
+                showSessionDisplay();
+            }
+        }
+        
+        // ========================================================================
         // Initialization
         // ========================================================================
         
         document.addEventListener('DOMContentLoaded', () => {
             initTerminal();
             connectWebSocket();
+            refreshX11Apps();
+            checkX11Available();
         });
     </script>
 </body>

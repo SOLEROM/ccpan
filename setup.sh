@@ -1,50 +1,38 @@
 #!/bin/bash
-# Tmux Control Panel v2 - Setup Script
+
+# setup.sh - Install dependencies for ccpan (xeyes branch)
+# Ubuntu only
 
 set -e
 
-echo "╔══════════════════════════════════════════════════════════════════╗"
-echo "║              Tmux Control Panel v2 - Setup                       ║"
-echo "╚══════════════════════════════════════════════════════════════════╝"
+echo "Installing system dependencies..."
+sudo apt-get update
+sudo apt-get install -y \
+    tmux \
+    python3 \
+    python3-pip \
+    python3-venv \
+    x11vnc \
+    xvfb \
+    xauth \
+    x11-apps \
+    websockify \
+    novnc
+
 echo ""
-
-# Check for tmux
-if ! command -v tmux &> /dev/null; then
-    echo "❌ tmux is not installed. Installing..."
-    sudo apt update && sudo apt install -y tmux
-else
-    echo "✅ tmux is installed"
-fi
-
-# Check for Python 3
-if ! command -v python3 &> /dev/null; then
-    echo "❌ Python 3 is not installed. Please install it first."
-    exit 1
-else
-    echo "✅ Python 3 is installed"
-fi
-
-# Create virtual environment
-if [ ! -d "venv" ]; then
-    echo "📦 Creating virtual environment..."
-    python3 -m venv venv
-else
-    echo "✅ Virtual environment exists"
-fi
-
-# Activate and install dependencies
-echo "📦 Installing dependencies..."
+echo "Setting up Python virtual environment..."
+python3 -m venv venv
 source venv/bin/activate
 pip install --upgrade pip
 pip install -r requirements.txt
 
 echo ""
-echo "╔══════════════════════════════════════════════════════════════════╗"
-echo "║                     Setup Complete!                              ║"
-echo "╠══════════════════════════════════════════════════════════════════╣"
-echo "║  To start the server:                                            ║"
-echo "║    source venv/bin/activate                                      ║"
-echo "║    python server.py                                              ║"
-echo "║                                                                  ║"
-echo "║  Then open: http://127.0.0.1:5000                                ║"
-echo "╚══════════════════════════════════════════════════════════════════╝"
+echo "Verifying installation..."
+echo -n "x11vnc: "; x11vnc -version 2>&1 | head -1 || echo "NOT FOUND"
+echo -n "Xvfb: "; which Xvfb || echo "NOT FOUND"
+echo -n "websockify: "; which websockify || echo "NOT FOUND"
+echo -n "xeyes: "; which xeyes || echo "NOT FOUND"
+
+echo ""
+echo "Setup complete!"
+echo "Run: source venv/bin/activate && python server.py"
