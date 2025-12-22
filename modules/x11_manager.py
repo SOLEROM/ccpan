@@ -13,7 +13,7 @@ import socket as sock
 class X11Manager:
     """Manages X11 virtual displays for GUI applications."""
     
-    DISPLAY_BASE = 99
+    DISPLAY_BASE = 100
     
     def __init__(self):
         self.displays = {}  # display_num -> display info

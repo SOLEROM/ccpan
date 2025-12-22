@@ -402,15 +402,20 @@ body {
 
 /* Layout modes */
 .workspace__content--terminals-only {
-    flex-direction: column;
+    flex-direction: row;
 }
 
 .workspace__content--split-h {
     flex-direction: row;
 }
 
-.workspace__content--split-v {
+/* GUI panels container - stacks vertically on the left */
+.gui-container {
+    display: flex;
     flex-direction: column;
+    gap: 0;
+    min-width: 200px;
+    min-height: 0;
 }
 
 /* ============================================================================
@@ -543,6 +548,7 @@ body {
     overflow: hidden;
     min-width: 200px;
     min-height: 150px;
+    flex: 1;
 }
 
 .gui-panel__header {
@@ -575,7 +581,7 @@ body {
 .gui-panel__controls {
     display: flex;
     align-items: center;
-    gap: var(--spacing-sm);
+    gap: var(--spacing-xs);
 }
 
 .gui-panel__body {
@@ -609,6 +615,54 @@ body {
 
 .gui-panel--hidden {
     display: none;
+}
+
+/* Fullscreen mode for GUI panel */
+.gui-panel--fullscreen {
+    position: fixed !important;
+    top: 0 !important;
+    left: 0 !important;
+    right: 0 !important;
+    bottom: 0 !important;
+    width: 100vw !important;
+    height: 100vh !important;
+    z-index: 2000 !important;
+    border-radius: 0 !important;
+    margin: 0 !important;
+}
+
+.gui-panel--fullscreen .gui-panel__header {
+    background: var(--bg-primary);
+}
+
+/* Detached/Popout window styles */
+.gui-panel--detached {
+    position: fixed;
+    z-index: 1500;
+    box-shadow: 0 10px 40px rgba(0, 0, 0, 0.5);
+    resize: both;
+    overflow: auto;
+}
+
+.gui-panel--detached .gui-panel__header {
+    cursor: move;
+    background: var(--bg-primary);
+}
+
+/* Overlay when panel is fullscreen */
+.fullscreen-overlay {
+    display: none;
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background: rgba(0, 0, 0, 0.9);
+    z-index: 1999;
+}
+
+.fullscreen-overlay--visible {
+    display: block;
 }
 
 /* ============================================================================

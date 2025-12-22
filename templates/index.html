@@ -140,7 +140,7 @@
             
             <!-- Workspace Content -->
             <div class="workspace__content workspace__content--terminals-only" id="workspaceContent">
-                <!-- Terminal Panel -->
+                <!-- Terminal Panel (left side) -->
                 <div class="terminal-panel" id="terminalPanel">
                     <div class="terminal-panel__header">
                         <span class="terminal-panel__title" id="terminalTitle">No session selected</span>
@@ -164,68 +164,89 @@
                     </div>
                 </div>
                 
-                <!-- GUI Panel 1 -->
-                <div class="gui-panel gui-panel--hidden" id="guiPanel1">
-                    <div class="gui-panel__header">
-                        <span class="gui-panel__title">
-                            🖼️ GUI 1 <span class="gui-panel__display-num">Not connected</span>
-                        </span>
-                        <div class="gui-panel__controls">
-                            <button class="btn btn--primary btn--sm" onclick="showConnectDisplayModal(0)">Connect</button>
-                            <button class="btn btn--secondary btn--sm" onclick="bindDisplayToSession(state.guiPanels[0].displayNum)" title="Set DISPLAY in terminal">Bind</button>
-                            <button class="btn btn--danger btn--sm" onclick="disconnectGuiPanel(0)">×</button>
-                        </div>
-                    </div>
-                    <div class="gui-panel__body">
-                        <div class="gui-panel__placeholder">
-                            <div class="gui-panel__placeholder-icon">🖼️</div>
-                            <div class="gui-panel__placeholder-text">Click "Connect" to attach a display</div>
-                        </div>
-                    </div>
-                </div>
+                <!-- Main Resizer (between Terminal and GUI container) -->
+                <div class="resizer resizer--horizontal" id="mainResizer" style="display: none;"></div>
                 
-                <!-- GUI Panel 2 -->
-                <div class="gui-panel gui-panel--hidden" id="guiPanel2">
-                    <div class="gui-panel__header">
-                        <span class="gui-panel__title">
-                            🖼️ GUI 2 <span class="gui-panel__display-num">Not connected</span>
-                        </span>
-                        <div class="gui-panel__controls">
-                            <button class="btn btn--primary btn--sm" onclick="showConnectDisplayModal(1)">Connect</button>
-                            <button class="btn btn--secondary btn--sm" onclick="bindDisplayToSession(state.guiPanels[1].displayNum)" title="Set DISPLAY in terminal">Bind</button>
-                            <button class="btn btn--danger btn--sm" onclick="disconnectGuiPanel(1)">×</button>
+                <!-- GUI Container (right side, stacks vertically) -->
+                <div class="gui-container" id="guiContainer" style="display: none;">
+                    <!-- GUI Panel 1 -->
+                    <div class="gui-panel gui-panel--hidden" id="guiPanel1">
+                        <div class="gui-panel__header">
+                            <span class="gui-panel__title">
+                                🖼️ GUI 1 <span class="gui-panel__display-num">Not connected</span>
+                            </span>
+                            <div class="gui-panel__controls">
+                                <button class="btn btn--primary btn--sm" onclick="showConnectDisplayModal(0)">Connect</button>
+                                <button class="btn btn--secondary btn--sm" onclick="bindDisplayToSession(state.guiPanels[0].displayNum)" title="Set DISPLAY in terminal">Bind</button>
+                                <button class="btn btn--secondary btn--sm" onclick="toggleFullscreen(0)" title="Fullscreen">⛶</button>
+                                <button class="btn btn--secondary btn--sm" onclick="toggleDetach(0)" title="Detach/Pop-out">⧉</button>
+                                <button class="btn btn--danger btn--sm" onclick="disconnectGuiPanel(0)">×</button>
+                            </div>
+                        </div>
+                        <div class="gui-panel__body">
+                            <div class="gui-panel__placeholder">
+                                <div class="gui-panel__placeholder-icon">🖼️</div>
+                                <div class="gui-panel__placeholder-text">Click "Connect" to attach a display</div>
+                            </div>
                         </div>
                     </div>
-                    <div class="gui-panel__body">
-                        <div class="gui-panel__placeholder">
-                            <div class="gui-panel__placeholder-icon">🖼️</div>
-                            <div class="gui-panel__placeholder-text">Click "Connect" to attach a display</div>
+                    
+                    <!-- Resizer between GUI 1 and GUI 2 -->
+                    <div class="resizer resizer--vertical gui-resizer" data-index="0" style="display: none;"></div>
+                    
+                    <!-- GUI Panel 2 -->
+                    <div class="gui-panel gui-panel--hidden" id="guiPanel2">
+                        <div class="gui-panel__header">
+                            <span class="gui-panel__title">
+                                🖼️ GUI 2 <span class="gui-panel__display-num">Not connected</span>
+                            </span>
+                            <div class="gui-panel__controls">
+                                <button class="btn btn--primary btn--sm" onclick="showConnectDisplayModal(1)">Connect</button>
+                                <button class="btn btn--secondary btn--sm" onclick="bindDisplayToSession(state.guiPanels[1].displayNum)" title="Set DISPLAY in terminal">Bind</button>
+                                <button class="btn btn--secondary btn--sm" onclick="toggleFullscreen(1)" title="Fullscreen">⛶</button>
+                                <button class="btn btn--secondary btn--sm" onclick="toggleDetach(1)" title="Detach/Pop-out">⧉</button>
+                                <button class="btn btn--danger btn--sm" onclick="disconnectGuiPanel(1)">×</button>
+                            </div>
+                        </div>
+                        <div class="gui-panel__body">
+                            <div class="gui-panel__placeholder">
+                                <div class="gui-panel__placeholder-icon">🖼️</div>
+                                <div class="gui-panel__placeholder-text">Click "Connect" to attach a display</div>
+                            </div>
                         </div>
                     </div>
-                </div>
-                
-                <!-- GUI Panel 3 -->
-                <div class="gui-panel gui-panel--hidden" id="guiPanel3">
-                    <div class="gui-panel__header">
-                        <span class="gui-panel__title">
-                            🖼️ GUI 3 <span class="gui-panel__display-num">Not connected</span>
-                        </span>
-                        <div class="gui-panel__controls">
-                            <button class="btn btn--primary btn--sm" onclick="showConnectDisplayModal(2)">Connect</button>
-                            <button class="btn btn--secondary btn--sm" onclick="bindDisplayToSession(state.guiPanels[2].displayNum)" title="Set DISPLAY in terminal">Bind</button>
-                            <button class="btn btn--danger btn--sm" onclick="disconnectGuiPanel(2)">×</button>
+                    
+                    <!-- Resizer between GUI 2 and GUI 3 -->
+                    <div class="resizer resizer--vertical gui-resizer" data-index="1" style="display: none;"></div>
+                    
+                    <!-- GUI Panel 3 -->
+                    <div class="gui-panel gui-panel--hidden" id="guiPanel3">
+                        <div class="gui-panel__header">
+                            <span class="gui-panel__title">
+                                🖼️ GUI 3 <span class="gui-panel__display-num">Not connected</span>
+                            </span>
+                            <div class="gui-panel__controls">
+                                <button class="btn btn--primary btn--sm" onclick="showConnectDisplayModal(2)">Connect</button>
+                                <button class="btn btn--secondary btn--sm" onclick="bindDisplayToSession(state.guiPanels[2].displayNum)" title="Set DISPLAY in terminal">Bind</button>
+                                <button class="btn btn--secondary btn--sm" onclick="toggleFullscreen(2)" title="Fullscreen">⛶</button>
+                                <button class="btn btn--secondary btn--sm" onclick="toggleDetach(2)" title="Detach/Pop-out">⧉</button>
+                                <button class="btn btn--danger btn--sm" onclick="disconnectGuiPanel(2)">×</button>
+                            </div>
                         </div>
-                    </div>
-                    <div class="gui-panel__body">
-                        <div class="gui-panel__placeholder">
-                            <div class="gui-panel__placeholder-icon">🖼️</div>
-                            <div class="gui-panel__placeholder-text">Click "Connect" to attach a display</div>
+                        <div class="gui-panel__body">
+                            <div class="gui-panel__placeholder">
+                                <div class="gui-panel__placeholder-icon">🖼️</div>
+                                <div class="gui-panel__placeholder-text">Click "Connect" to attach a display</div>
+                            </div>
                         </div>
                     </div>
                 </div>
             </div>
         </main>
     </div>
+    
+    <!-- Fullscreen Overlay -->
+    <div class="fullscreen-overlay" id="fullscreenOverlay"></div>
     
     <!-- New Session Modal -->
     <div class="modal-overlay" id="newSessionModal">
