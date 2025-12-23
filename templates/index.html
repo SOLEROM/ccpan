@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Tmux Control Panel v4</title>
+    <title>Terminal Control Panel - Terminator</title>
     
     <!-- xterm.js -->
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/xterm@5.3.0/css/xterm.css">
@@ -23,18 +23,15 @@
         <div class="header__brand">
             <h1 class="header__logo">
                 <span class="header__logo-icon">⌨️</span>
-                Tmux Control Panel
+                Terminal Control Panel
+                <span style="font-size: 0.65rem; color: var(--accent-orange); margin-left: 8px; font-weight: 400;">TERMINATOR</span>
             </h1>
         </div>
         
         <div class="header__config">
             <div class="config-field">
-                <label class="config-field__label">Socket</label>
-                <input type="text" id="socketInput" class="config-field__input" value="control-panel" title="tmux socket name">
-            </div>
-            <div class="config-field">
                 <label class="config-field__label">Prefix</label>
-                <input type="text" id="prefixInput" class="config-field__input" value="cp-" title="Session name prefix">
+                <input type="text" id="prefixInput" class="config-field__input" value="term-" title="Session name prefix" style="width: 80px;">
             </div>
         </div>
         

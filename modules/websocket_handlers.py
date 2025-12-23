@@ -1,164 +1,130 @@
 """
-WebSocket event handlers for the Tmux Control Panel.
+WebSocket handlers for real-time terminal I/O (Terminator branch).
+Uses direct PTY terminals instead of tmux.
 """
 
-import signal
-from flask import request
-from flask_socketio import emit, join_room, leave_room
+from flask_socketio import emit
 
 
-def register_websocket_handlers(socketio, app):
+def register_websocket_handlers(socketio, managers):
     """Register all WebSocket event handlers."""
     
-    def get_managers():
-        return app.config['managers']
+    terminal_mgr = managers['terminal']
+    
+    # Track subscriptions per client
+    client_sessions = {}  # sid -> session_name
+    
+    def output_callback(session, data):
+        """Called when terminal produces output."""
+        socketio.emit('output', {
+            'session': session,
+            'data': data.decode('utf-8', errors='replace')
+        })
     
     @socketio.on('connect')
     def handle_connect():
-        emit('connected', {'status': 'ok'})
+        """Handle client connection."""
+        print(f"Client connected: {request.sid if hasattr(request, 'sid') else 'unknown'}")
     
     @socketio.on('disconnect')
     def handle_disconnect():
-        mgrs = get_managers()
-        for session_name in list(mgrs['pty'].connections.keys()):
-            mgrs['pty'].remove_client(session_name, request.sid)
+        """Handle client disconnection."""
+        sid = getattr(request, 'sid', None)
+        if sid and sid in client_sessions:
+            session = client_sessions.pop(sid)
+            print(f"Client {sid} disconnected from session {session}")
     
     @socketio.on('subscribe')
     def handle_subscribe(data):
-        """Subscribe to a session's output."""
-        mgrs = get_managers()
-        session_name = data.get('session')
-        cols = data.get('cols', 120)
-        rows = data.get('rows', 40)
-        socket = data.get('socket')
+        """Subscribe to a terminal session's output."""
+        session = data.get('session')
+        cols = data.get('cols', 80)
+        rows = data.get('rows', 24)
         
-        if not session_name:
+        if not session:
             emit('error', {'message': 'No session specified'})
             return
         
-        full_name = mgrs['tmux'].get_full_name(session_name)
-        
-        if not mgrs['tmux'].session_exists(full_name, socket=socket):
-            emit('error', {'message': f'Session {full_name} does not exist'})
+        # Check if session exists
+        if not terminal_mgr.session_exists(session):
+            emit('error', {'message': f'Session {session} not found'})
             return
         
-        # Resize before connecting
-        mgrs['pty'].resize(full_name, cols, rows, socket=socket)
+        # Track this client's subscription
+        sid = getattr(request, 'sid', None)
+        if sid:
+            client_sessions[sid] = session
         
-        join_room(full_name)
-        conn = mgrs['pty'].get_or_create(full_name, request.sid, cols, rows, socket=socket)
+        # Resize terminal
+        terminal_mgr.resize_window(session, cols, rows)
         
-        if not conn:
-            emit('error', {'message': f'Failed to connect to session {full_name}'})
-            return
+        # Start reader for this session
+        terminal_mgr.start_reader(session, output_callback)
         
-        # Resize again after PTY is connected
-        mgrs['pty'].resize(full_name, cols, rows, socket=socket)
-        
-        emit('subscribed', {'session': full_name})
+        emit('subscribed', {'session': session})
+        print(f"Client subscribed to session: {session}")
     
     @socketio.on('unsubscribe')
     def handle_unsubscribe(data):
-        """Unsubscribe from a session."""
-        mgrs = get_managers()
-        session_name = data.get('session')
+        """Unsubscribe from a terminal session."""
+        session = data.get('session')
+        sid = getattr(request, 'sid', None)
         
-        if not session_name:
-            return
+        if sid and sid in client_sessions:
+            del client_sessions[sid]
         
-        full_name = mgrs['tmux'].get_full_name(session_name)
-        leave_room(full_name)
-        mgrs['pty'].remove_client(full_name, request.sid)
-        emit('unsubscribed', {'session': full_name})
+        print(f"Client unsubscribed from session: {session}")
     
     @socketio.on('input')
     def handle_input(data):
-        """Handle keyboard input."""
-        mgrs = get_managers()
-        session_name = data.get('session')
+        """Handle terminal input from client."""
+        session = data.get('session')
         keys = data.get('keys', '')
         
-        if session_name and keys:
-            full_name = mgrs['tmux'].get_full_name(session_name)
-            mgrs['pty'].send_keys(full_name, keys)
+        if not session or not keys:
+            return
+        
+        if not terminal_mgr.session_exists(session):
+            emit('error', {'message': f'Session {session} not found'})
+            return
+        
+        terminal_mgr.send_keys(session, keys)
     
     @socketio.on('resize')
     def handle_resize(data):
         """Handle terminal resize."""
-        mgrs = get_managers()
-        session_name = data.get('session')
+        session = data.get('session')
         cols = data.get('cols', 80)
         rows = data.get('rows', 24)
-        socket = data.get('socket')
         
-        if session_name:
-            full_name = mgrs['tmux'].get_full_name(session_name)
-            mgrs['pty'].resize(full_name, cols, rows, socket=socket)
+        if not session:
+            return
+        
+        if terminal_mgr.session_exists(session):
+            terminal_mgr.resize_window(session, cols, rows)
     
     @socketio.on('signal')
     def handle_signal(data):
-        """Send a signal to the foreground process."""
-        mgrs = get_managers()
-        session_name = data.get('session')
-        sig_name = data.get('signal', 'SIGINT')
-        socket = data.get('socket')
+        """Send a signal to the terminal process."""
+        session = data.get('session')
+        sig = data.get('signal', 'INT')
         
-        if not session_name:
+        if not session:
             return
         
-        full_name = mgrs['tmux'].get_full_name(session_name)
-        sig_map = {
-            'SIGINT': signal.SIGINT,
-            'SIGTERM': signal.SIGTERM,
-            'SIGKILL': signal.SIGKILL,
-            'SIGSTOP': signal.SIGSTOP,
-            'SIGCONT': signal.SIGCONT,
-            'SIGTSTP': signal.SIGTSTP,
-        }
-        mgrs['tmux'].send_signal(full_name, sig_map.get(sig_name, signal.SIGINT), socket=socket)
+        if terminal_mgr.session_exists(session):
+            terminal_mgr.send_signal(session, sig)
     
+    # Note: scroll events are not supported in terminator mode
+    # since we don't have tmux's copy-mode. Scrollback is handled
+    # by xterm.js on the client side.
     @socketio.on('scroll')
     def handle_scroll(data):
-        """Handle scroll in copy-mode."""
-        mgrs = get_managers()
-        session_name = data.get('session')
-        command = data.get('command', '')
-        lines = data.get('lines', 1)
-        socket = data.get('socket')
-        
-        if not session_name:
-            return
-        
-        full_name = mgrs['tmux'].get_full_name(session_name)
-        
-        if command == 'enter':
-            mgrs['tmux'].enter_copy_mode(full_name, socket=socket)
-        elif command == 'exit':
-            mgrs['tmux'].scroll(full_name, 'exit', socket=socket)
-        elif command in ['up', 'down', 'page_up', 'page_down', 'top', 'bottom']:
-            mgrs['tmux'].scroll(full_name, command, lines, socket=socket)
-    
-    @socketio.on('get_scrollback')
-    def handle_get_scrollback(data):
-        """Get scrollback content from tmux."""
-        mgrs = get_managers()
-        session_name = data.get('session')
-        start_line = data.get('start_line', -1000)
-        end_line = data.get('end_line', None)
-        socket = data.get('socket')
-        
-        if not session_name:
-            emit('error', {'message': 'No session specified'})
-            return
-        
-        full_name = mgrs['tmux'].get_full_name(session_name)
-        
-        content = mgrs['tmux'].get_scrollback(full_name, start_line, end_line, socket=socket)
-        history_size = mgrs['tmux'].get_history_size(full_name, socket=socket)
-        
-        emit('scrollback', {
-            'session': full_name,
-            'content': content,
-            'history_size': history_size,
-            'start_line': start_line
-        })
+        """Handle scroll request - not supported in terminator mode."""
+        # In terminator mode, scrollback is handled by xterm.js
+        # We could implement a scrollback buffer if needed
+        pass
+
+
+# Need to import request for sid access
+from flask import request

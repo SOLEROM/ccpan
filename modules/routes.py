@@ -1,5 +1,6 @@
 """
-REST API routes for the Tmux Control Panel.
+REST API routes for the Terminal Control Panel (Terminator branch).
+Uses direct PTY terminals instead of tmux.
 """
 
 import uuid
@@ -38,7 +39,7 @@ def register_routes(app):
         data = request.get_json() or {}
         
         # Update allowed fields
-        allowed = ['tmux_socket', 'session_prefix']
+        allowed = ['session_prefix']
         updates = {k: v for k, v in data.items() if k in allowed}
         
         if updates:
@@ -47,31 +48,28 @@ def register_routes(app):
         return jsonify({'status': 'ok', 'config': mgrs['config'].to_dict()})
     
     # =========================================================================
-    # Sessions API
+    # Sessions API (now using terminal_manager)
     # =========================================================================
     
     @app.route('/api/sessions', methods=['GET'])
     def list_sessions():
-        """List all tmux sessions."""
+        """List all terminal sessions."""
         mgrs = get_managers()
-        socket = request.args.get('socket')
-        sessions = mgrs['tmux'].get_sessions(socket=socket)
+        sessions = mgrs['terminal'].get_sessions()
         return jsonify({'sessions': sessions, 'count': len(sessions)})
     
     @app.route('/api/sessions', methods=['POST'])
     def create_session():
-        """Create a new tmux session."""
+        """Create a new terminal session."""
         mgrs = get_managers()
         data = request.get_json() or {}
         
         name = data.get('name', f"session-{uuid.uuid4().hex[:8]}")
-        socket = data.get('socket')
         
-        success, result = mgrs['tmux'].create_session(
+        success, result = mgrs['terminal'].create_session(
             name, 
             data.get('cwd'), 
-            data.get('command'),
-            socket=socket
+            data.get('command')
         )
         
         if success:
@@ -80,14 +78,10 @@ def register_routes(app):
     
     @app.route('/api/sessions/<name>', methods=['DELETE'])
     def delete_session(name):
-        """Delete a tmux session."""
+        """Delete a terminal session."""
         mgrs = get_managers()
-        socket = request.args.get('socket')
-                
-        # Cleanup PTY connection first
-        mgrs['pty'].cleanup(name)
         
-        if mgrs['tmux'].destroy_session(name, socket=socket):
+        if mgrs['terminal'].destroy_session(name):
             return jsonify({'status': 'ok'})
         return jsonify({'status': 'error', 'message': 'Failed to destroy session'}), 400
     
@@ -97,16 +91,15 @@ def register_routes(app):
         mgrs = get_managers()
         data = request.get_json() or {}
         command = data.get('command', '')
-        socket = data.get('socket')
         
         if not command:
             return jsonify({'status': 'error', 'message': 'No command provided'}), 400
         
-        full_name = mgrs['tmux'].get_full_name(name)
-        if not mgrs['tmux'].session_exists(full_name, socket=socket):
+        full_name = mgrs['terminal'].get_full_name(name)
+        if not mgrs['terminal'].session_exists(full_name):
             return jsonify({'status': 'error', 'message': 'Session not found'}), 404
         
-        if mgrs['pty'].send_keys(full_name, command + '\n'):
+        if mgrs['terminal'].send_keys(full_name, command + '\n'):
             return jsonify({'status': 'ok'})
         return jsonify({'status': 'error', 'message': 'Failed to send command'}), 400
     
@@ -122,9 +115,10 @@ def register_routes(app):
     
     @app.route('/api/commands/<session>', methods=['GET'])
     def get_session_commands(session):
-        """Get commands for a session."""
+        """Get commands for a specific session."""
         mgrs = get_managers()
-        return jsonify(mgrs['commands'].get(session))
+        commands = mgrs['commands'].get(session)
+        return jsonify({'session': session, 'commands': commands})
     
     @app.route('/api/commands/<session>', methods=['POST'])
     def add_command(session):
@@ -132,49 +126,32 @@ def register_routes(app):
         mgrs = get_managers()
         data = request.get_json() or {}
         
-        if not data.get('command'):
-            return jsonify({'status': 'error', 'message': 'No command provided'}), 400
+        label = data.get('label', '')
+        command = data.get('command', '')
         
-        commands = mgrs['commands'].add(
-            session, 
-            data.get('label', 'Command'), 
-            data['command']
-        )
-        return jsonify({'status': 'ok', 'commands': commands})
+        if not label or not command:
+            return jsonify({'status': 'error', 'message': 'Label and command required'}), 400
+        
+        mgrs['commands'].add(session, label, command)
+        return jsonify({'status': 'ok', 'commands': mgrs['commands'].get(session)})
     
     @app.route('/api/commands/<session>/<int:index>', methods=['DELETE'])
     def delete_command(session, index):
         """Delete a command from a session."""
         mgrs = get_managers()
-        commands = mgrs['commands'].delete(session, index)
-        
-        if commands is None:
-            return jsonify({'status': 'error', 'message': 'Command not found'}), 404
-        return jsonify({'status': 'ok', 'commands': commands})
+        mgrs['commands'].delete(session, index)
+        return jsonify({'status': 'ok', 'commands': mgrs['commands'].get(session)})
     
     # =========================================================================
     # X11 Display API
     # =========================================================================
     
-    @app.route('/api/x11/check', methods=['GET'])
-    def check_x11_deps():
-        """Check if X11 dependencies are installed."""
-        mgrs = get_managers()
-        missing = mgrs['x11'].check_dependencies()
-        
-        if missing:
-            return jsonify({
-                'status': 'missing',
-                'missing': missing,
-                'install_cmd': 'sudo apt install xvfb x11vnc websockify'
-            })
-        return jsonify({'status': 'ok'})
-    
     @app.route('/api/x11/displays', methods=['GET'])
     def list_displays():
-        """List all active X11 displays."""
+        """List all X11 displays."""
         mgrs = get_managers()
-        return jsonify({'displays': mgrs['x11'].list_displays()})
+        displays = mgrs['x11'].list_displays()
+        return jsonify({'displays': displays, 'count': len(displays)})
     
     @app.route('/api/x11/displays', methods=['POST'])
     def create_display():
@@ -194,51 +171,34 @@ def register_routes(app):
         
         if error:
             return jsonify({'status': 'error', 'message': error}), 400
-        return jsonify({'status': 'ok', 'display': result})
+        
+        return jsonify({
+            'status': 'ok',
+            'display': result['display'],
+            'display_num': result['display_num'],
+            'ws_port': result['ws_port'],
+            'vnc_port': result.get('vnc_port')
+        })
+    
+    @app.route('/api/x11/displays/<int:display_num>', methods=['DELETE'])
+    def stop_display(display_num):
+        """Stop an X11 display."""
+        mgrs = get_managers()
+        
+        if mgrs['x11'].stop_display(display_num):
+            return jsonify({'status': 'ok'})
+        return jsonify({'status': 'error', 'message': 'Display not found'}), 404
     
     @app.route('/api/x11/displays/<int:display_num>', methods=['GET'])
     def get_display(display_num):
-        """Get info about an X11 display."""
+        """Get info about a specific display."""
         mgrs = get_managers()
-        info = mgrs['x11'].get_display(display_num)
+        displays = mgrs['x11'].list_displays()
         
-        if info:
-            return jsonify({'status': 'ok', 'display': info})
-        return jsonify({'status': 'none', 'message': 'Display not found'})
-    
-    @app.route('/api/x11/displays/<int:display_num>', methods=['DELETE'])
-    def delete_display(display_num):
-        """Stop an X11 display."""
-        mgrs = get_managers()
-        success, error = mgrs['x11'].stop_display(display_num)
+        for d in displays:
+            if d['display_num'] == display_num:
+                return jsonify(d)
         
-        if not success:
-            return jsonify({'status': 'error', 'message': error}), 404
-        return jsonify({'status': 'ok'})
-    
-    @app.route('/api/x11/displays/<int:display_num>/resize', methods=['POST'])
-    def resize_display(display_num):
-        """Resize an X11 display."""
-        mgrs = get_managers()
-        data = request.get_json() or {}
-        
-        width = data.get('width', 1280)
-        height = data.get('height', 800)
-        
-        result, error = mgrs['x11'].resize_display(display_num, width, height)
-        
-        if error:
-            return jsonify({'status': 'error', 'message': error}), 400
-        return jsonify({'status': 'ok', 'display': result})
-    
-    @app.route('/api/x11/displays/<int:display_num>/env', methods=['GET'])
-    def get_display_env(display_num):
-        """Get environment setup commands for a display."""
-        mgrs = get_managers()
-        env_cmd = mgrs['x11'].get_env_setup_commands(display_num)
-        
-        if env_cmd:
-            return jsonify({'status': 'ok', 'command': env_cmd, 'display': f':{display_num}'})
         return jsonify({'status': 'error', 'message': 'Display not found'}), 404
     
     # =========================================================================
@@ -247,58 +207,32 @@ def register_routes(app):
     
     @app.route('/api/sessions/<session>/bind-display', methods=['POST'])
     def bind_display_to_session(session):
-        """Bind a display to a session and set up environment."""
+        """Bind an X11 display to a session by setting DISPLAY env var."""
         mgrs = get_managers()
         data = request.get_json() or {}
-        
         display_num = data.get('display_num')
-        socket = data.get('socket')
         
         if display_num is None:
             return jsonify({'status': 'error', 'message': 'display_num required'}), 400
         
-        # Check display exists
-        display_info = mgrs['x11'].get_display(display_num)
-        if not display_info:
-            return jsonify({'status': 'error', 'message': f'Display :{display_num} not found'}), 404
+        full_name = mgrs['terminal'].get_full_name(session)
         
-        full_name = mgrs['tmux'].get_full_name(session)
-        if not mgrs['tmux'].session_exists(full_name, socket=socket):
+        if not mgrs['terminal'].session_exists(full_name):
             return jsonify({'status': 'error', 'message': 'Session not found'}), 404
         
-        display = f":{display_num}"
+        displays = mgrs['x11'].list_displays()
+        display_exists = any(d['display_num'] == display_num for d in displays)
+        if not display_exists:
+            return jsonify({'status': 'error', 'message': 'Display not found'}), 404
         
-        # Set environment in tmux session
-        mgrs['tmux'].set_environment(full_name, "DISPLAY", display, socket=socket)
-        mgrs['tmux'].set_environment(full_name, "WAYLAND_DISPLAY", unset=True, socket=socket)
-        mgrs['tmux'].set_environment(full_name, "GDK_BACKEND", "x11", socket=socket)
-        mgrs['tmux'].set_environment(full_name, "QT_QPA_PLATFORM", "xcb", socket=socket)
-        mgrs['tmux'].set_environment(full_name, "LIBGL_ALWAYS_SOFTWARE", "1", socket=socket)
-        mgrs['tmux'].set_environment(full_name, "GALLIUM_DRIVER", "llvmpipe", socket=socket)
-        mgrs['tmux'].set_environment(full_name, "MESA_GL_VERSION_OVERRIDE", "3.3", socket=socket)
+        display_str = f":{display_num}"
+        export_cmd = f"export DISPLAY={display_str}\n"
         
-        # Send export commands to the shell
-        env_cmd = mgrs['x11'].get_env_setup_commands(display_num)
-        if env_cmd:
-            mgrs['pty'].send_keys(full_name, env_cmd + '\n')
+        if mgrs['terminal'].send_keys(full_name, export_cmd):
+            return jsonify({
+                'status': 'ok',
+                'session': full_name,
+                'display': display_str
+            })
         
-        return jsonify({
-            'status': 'ok',
-            'session': full_name,
-            'display': display,
-            'display_info': display_info
-        })
-    
-    @app.route('/api/sessions/<session>/unbind-display', methods=['POST'])
-    def unbind_display_from_session(session):
-        """Unbind display from a session."""
-        mgrs = get_managers()
-        socket = request.get_json().get('socket') if request.get_json() else None
-        
-        full_name = mgrs['tmux'].get_full_name(session)
-        
-        # Unset DISPLAY
-        mgrs['tmux'].set_environment(full_name, "DISPLAY", unset=True, socket=socket)
-        mgrs['pty'].send_keys(full_name, 'unset DISPLAY\n')
-        
-        return jsonify({'status': 'ok', 'session': full_name})
+        return jsonify({'status': 'error', 'message': 'Failed to set DISPLAY'}), 400

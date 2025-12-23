@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
 """
-Tmux Control Panel v4 - Multi-Display Terminal Manager
+Terminal Control Panel - Terminator Branch
 
-A web-based tmux session manager with X11 GUI display support.
-Supports multiple layout configurations and configurable tmux prefixes.
+A web-based terminal manager with X11 GUI display support.
+Uses direct PTY terminals instead of tmux for ephemeral sessions.
+
+Terminals are NOT persistent - they are destroyed when the server stops.
 """
 
 import os
@@ -30,8 +32,7 @@ from flask_cors import CORS
 
 # Import our modules
 from modules.config import Config
-from modules.tmux_manager import TmuxManager
-from modules.pty_manager import PtyManager
+from modules.terminal_manager import TerminalManager
 from modules.x11_manager import X11Manager
 from modules.commands_manager import CommandsManager
 from modules.routes import register_routes
@@ -40,39 +41,33 @@ from modules.websocket_handlers import register_websocket_handlers
 
 def create_app():
     """Create and configure the Flask application."""
-    app = Flask(__name__, 
-                template_folder='templates',
-                static_folder='static')
+    app = Flask(__name__)
     app.config['SECRET_KEY'] = os.urandom(24)
-    CORS(app)
     
+    CORS(app)
     socketio = SocketIO(app, cors_allowed_origins="*", async_mode=ASYNC_MODE)
     
     # Initialize managers
     config = Config()
-    tmux_mgr = TmuxManager(config)
-    pty_mgr = PtyManager(tmux_mgr, socketio)
-    x11_mgr = X11Manager()
-    cmd_mgr = CommandsManager()
-    
-    # Store managers in app context
-    app.config['managers'] = {
+    managers = {
         'config': config,
-        'tmux': tmux_mgr,
-        'pty': pty_mgr,
-        'x11': x11_mgr,
-        'commands': cmd_mgr
+        'terminal': TerminalManager(config),
+        'x11': X11Manager(),
+        'commands': CommandsManager()
     }
+    
+    app.config['managers'] = managers
     
     # Register routes and handlers
     register_routes(app)
-    register_websocket_handlers(socketio, app)
+    register_websocket_handlers(socketio, managers)
     
     # Cleanup on exit
     def cleanup():
         print("\nCleaning up...")
-        x11_mgr.cleanup_all()
-        pty_mgr.cleanup_all()
+        managers['terminal'].cleanup_all()
+        managers['x11'].cleanup_all()
+        print("Cleanup complete.")
     
     atexit.register(cleanup)
     
@@ -82,7 +77,7 @@ def create_app():
 def main():
     import argparse
     
-    parser = argparse.ArgumentParser(description='Tmux Control Panel v4 - Multi-Display Terminal Manager')
+    parser = argparse.ArgumentParser(description='Terminal Control Panel (Terminator) - Ephemeral Terminal Manager')
     parser.add_argument('--public', action='store_true', 
                         help='Make server accessible on local network (0.0.0.0). Default is localhost only.')
     parser.add_argument('--port', type=int, default=5000,
@@ -108,10 +103,13 @@ def main():
     
     print(f"""
 ╔══════════════════════════════════════════════════════════════════╗
-║            Tmux Control Panel v4 - Multi-Display                 ║
+║       Terminal Control Panel - TERMINATOR Branch                 ║
+╠══════════════════════════════════════════════════════════════════╣
+║  Mode: Direct PTY (no tmux)                                      ║
+║  Sessions: Ephemeral - destroyed on server stop                  ║
 ╠══════════════════════════════════════════════════════════════════╣
 ║  Features:                                                       ║
-║  • Configurable tmux socket prefix per browser tab               ║
+║  • Fresh shell sessions with no history                          ║
 ║  • Flexible layout: terminals + up to 3 GUI displays             ║
 ║  • Each GUI display has configurable DISPLAY number              ║
 ║  • Direct PTY streaming with WebSocket                           ║
@@ -126,6 +124,8 @@ def main():
     else:
         print(f"Server starting on http://{host}:{port}")
         print(f"Use --public flag to make accessible on local network")
+    
+    print("\n⚠️  NOTE: Sessions will be destroyed when server stops!\n")
     
     socketio.run(app, host=host, port=port, debug=False)
 

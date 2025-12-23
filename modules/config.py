@@ -1,5 +1,5 @@
 """
-Configuration management for Tmux Control Panel.
+Configuration management for Terminal Control Panel (Terminator branch).
 """
 
 import os
@@ -7,13 +7,13 @@ import json
 from pathlib import Path
 
 DEFAULT_CONFIG = {
-    'tmux_socket': 'control-panel',
-    'session_prefix': 'cp-',
-    'xvfb_display_base': 99,
+    'session_prefix': 'term-',
+    'xvfb_display_base': 100,
     'commands_file': 'commands.json',
     'default_cols': 120,
     'default_rows': 40,
     'scrollback_limit': 50000,
+    'default_shell': os.environ.get('SHELL', '/bin/bash'),
 }
 
 
@@ -80,6 +80,10 @@ class Config:
     @property
     def scrollback_limit(self):
         return self._config['scrollback_limit']
+    
+    @property
+    def default_shell(self):
+        return self._config['default_shell']
     
     def to_dict(self):
         """Return config as dictionary."""

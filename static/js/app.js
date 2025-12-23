@@ -1,7 +1,8 @@
 /**
- * Tmux Control Panel v4 - Main Application
+ * Terminal Control Panel - Terminator Branch
  * 
- * Modular terminal manager with configurable layouts and X11 GUI support.
+ * Direct PTY terminal manager with configurable layouts and X11 GUI support.
+ * Sessions are ephemeral - they don't persist across server restarts.
  */
 
 // ============================================================================
@@ -14,44 +15,40 @@ const state = {
     fitAddon: null,
     
     config: {
-        tmuxSocket: 'control-panel',
-        sessionPrefix: 'cp-'
+        sessionPrefix: 'term-'
     },
     
     sessions: [],
     currentSession: null,
     customCommands: {},
-    inCopyMode: false,
+    
+    // Store terminal instances and buffers per session
+    sessionTerminals: {},  // session -> { terminal, fitAddon, buffer }
     
     displays: [],
     
-    // Layout: 'terminals-only', 'split-1', 'split-2', 'split-3'
     layout: 'terminals-only',
     
-    // GUI Panels - persist connections across layout changes
     guiPanels: [
         { displayNum: null, rfb: null, visible: false, detached: false, fullscreen: false },
         { displayNum: null, rfb: null, visible: false, detached: false, fullscreen: false },
         { displayNum: null, rfb: null, visible: false, detached: false, fullscreen: false }
     ],
     
-    // Panel sizes (percentages)
     panelSizes: {
         guiContainer: 50,
         terminal: 50,
         guiRows: [33.33, 33.33, 33.33]
     },
     
-    // Resizing state
     resizing: {
         active: false,
-        type: null, // 'main' or 'gui'
+        type: null,
         startPos: 0,
         startSize: 0,
         index: 0
     },
     
-    // Dragging state for detached panels
     dragging: {
         active: false,
         panel: null,
@@ -69,7 +66,6 @@ const dom = {};
 function cacheDomElements() {
     dom.statusDot = document.getElementById('statusDot');
     dom.statusText = document.getElementById('statusText');
-    dom.socketInput = document.getElementById('socketInput');
     dom.prefixInput = document.getElementById('prefixInput');
     dom.sessionList = document.getElementById('sessionList');
     dom.displayList = document.getElementById('displayList');
@@ -100,9 +96,7 @@ async function loadConfig() {
     try {
         const response = await fetch('/api/config');
         const config = await response.json();
-        state.config.tmuxSocket = config.tmux_socket;
         state.config.sessionPrefix = config.session_prefix;
-        dom.socketInput.value = config.tmux_socket;
         dom.prefixInput.value = config.session_prefix;
     } catch (error) {
         console.error('Failed to load config:', error);
@@ -110,17 +104,15 @@ async function loadConfig() {
 }
 
 async function saveConfig() {
-    const tmuxSocket = dom.socketInput.value.trim();
     const sessionPrefix = dom.prefixInput.value.trim();
-    if (!tmuxSocket || !sessionPrefix) return;
+    if (!sessionPrefix) return;
     
     try {
         await fetch('/api/config', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ tmux_socket: tmuxSocket, session_prefix: sessionPrefix })
+            body: JSON.stringify({ session_prefix: sessionPrefix })
         });
-        state.config.tmuxSocket = tmuxSocket;
         state.config.sessionPrefix = sessionPrefix;
         await refreshSessions();
     } catch (error) {
@@ -161,10 +153,7 @@ function connectWebSocket() {
     
     state.socket.on('subscribed', (data) => {
         console.log('Subscribed to session:', data.session);
-        if (state.terminal) {
-            state.terminal.clear();
-            state.terminal.reset();
-        }
+        // Don't clear terminal - we want to preserve the buffer when switching sessions
         setTimeout(() => {
             if (state.socket && state.socket.connected && state.terminal) {
                 state.socket.emit('resize', {
@@ -177,8 +166,10 @@ function connectWebSocket() {
     });
     
     state.socket.on('output', (data) => {
-        if (state.terminal && data.session === state.currentSession) {
-            state.terminal.write(data.data);
+        // Write to the session's terminal (even if not currently viewed)
+        const sessionTerm = state.sessionTerminals[data.session];
+        if (sessionTerm) {
+            sessionTerm.terminal.write(data.data);
         }
     });
     
@@ -204,91 +195,105 @@ function updateStatus(status) {
 // Terminal Setup
 // ============================================================================
 
-function initTerminal() {
-    state.terminal = new Terminal({
-        cursorBlink: true,
-        cursorStyle: 'block',
-        fontSize: 14,
-        fontFamily: '"JetBrains Mono", "Fira Code", Consolas, monospace',
-        scrollback: 50000,
-        theme: {
-            background: '#080a0d',
-            foreground: '#d4dae4',
-            cursor: '#4ecca3',
-            cursorAccent: '#080a0d',
-            selection: 'rgba(74, 158, 255, 0.3)',
-            black: '#1a1e25',
-            red: '#ff6b6b',
-            green: '#3dd68c',
-            yellow: '#ff9f43',
-            blue: '#4a9eff',
-            magenta: '#a78bfa',
-            cyan: '#22d3ee',
-            white: '#d4dae4',
-            brightBlack: '#5a6474',
-            brightRed: '#ff8787',
-            brightGreen: '#4ee09a',
-            brightYellow: '#ffb366',
-            brightBlue: '#6cb4ff',
-            brightMagenta: '#b8a3fb',
-            brightCyan: '#44e5f5',
-            brightWhite: '#ffffff'
+const terminalOptions = {
+    cursorBlink: true,
+    cursorStyle: 'block',
+    fontSize: 14,
+    fontFamily: '"JetBrains Mono", "Fira Code", Consolas, monospace',
+    scrollback: 10000,
+    theme: {
+        background: '#080a0d',
+        foreground: '#d4dae4',
+        cursor: '#4ecca3',
+        cursorAccent: '#080a0d',
+        selection: 'rgba(74, 158, 255, 0.3)',
+        black: '#1a1e25',
+        red: '#ff6b6b',
+        green: '#3dd68c',
+        yellow: '#ff9f43',
+        blue: '#4a9eff',
+        magenta: '#a78bfa',
+        cyan: '#22d3ee',
+        white: '#d4dae4',
+        brightBlack: '#5a6474',
+        brightRed: '#ff8787',
+        brightGreen: '#4ee09a',
+        brightYellow: '#ffb366',
+        brightBlue: '#6cb4ff',
+        brightMagenta: '#b8a3fb',
+        brightCyan: '#44e5f5',
+        brightWhite: '#ffffff'
+    }
+};
+
+function createTerminalForSession(session) {
+    // Create a new terminal instance for a session with its own DOM element
+    const terminal = new Terminal(terminalOptions);
+    const fitAddon = new FitAddon.FitAddon();
+    
+    terminal.loadAddon(fitAddon);
+    terminal.loadAddon(new WebLinksAddon.WebLinksAddon());
+    
+    // Create a container div for this terminal
+    const container = document.createElement('div');
+    container.id = 'terminal-' + session.replace(/[^a-zA-Z0-9]/g, '-');
+    container.style.width = '100%';
+    container.style.height = '100%';
+    container.style.display = 'none';
+    dom.terminalContainer.appendChild(container);
+    
+    // Open terminal in its container
+    terminal.open(container);
+    
+    terminal.onData((data) => {
+        if (state.currentSession === session && state.socket && state.socket.connected) {
+            state.socket.emit('input', { session: session, keys: data });
         }
     });
     
-    state.fitAddon = new FitAddon.FitAddon();
-    state.terminal.loadAddon(state.fitAddon);
-    state.terminal.loadAddon(new WebLinksAddon.WebLinksAddon());
-    
-    state.terminal.onData((data) => {
-        if (state.currentSession && state.socket && state.socket.connected) {
-            if (state.inCopyMode) {
-                state.inCopyMode = false;
-                state.socket.emit('input', { session: state.currentSession, keys: '\x1b' });
-                setTimeout(() => {
-                    state.socket.emit('input', { session: state.currentSession, keys: data });
-                }, 10);
-            } else {
-                state.socket.emit('input', { session: state.currentSession, keys: data });
-            }
+    terminal.onResize(({ cols, rows }) => {
+        if (state.currentSession === session && state.socket && state.socket.connected) {
+            state.socket.emit('resize', { session: session, cols, rows });
         }
     });
     
-    state.terminal.onResize(({ cols, rows }) => {
-        if (state.currentSession && state.socket && state.socket.connected) {
-            state.socket.emit('resize', { session: state.currentSession, cols, rows });
-        }
-    });
+    state.sessionTerminals[session] = { terminal, fitAddon, container };
+    return state.sessionTerminals[session];
 }
 
-function attachTerminal() {
-    dom.terminalContainer.innerHTML = '';
-    state.terminal.open(dom.terminalContainer);
-    state.terminal.clear();
-    
-    dom.terminalContainer.addEventListener('wheel', (e) => {
-        e.preventDefault();
-        if (!state.currentSession || !state.socket || !state.socket.connected) return;
-        
-        const scrollUp = e.deltaY < 0;
-        const lines = Math.max(1, Math.abs(Math.round(e.deltaY / 30)));
-        
-        if (scrollUp) {
-            if (!state.inCopyMode) {
-                state.socket.emit('scroll', { session: state.currentSession, command: 'enter' });
-                state.inCopyMode = true;
-                setTimeout(() => state.socket.emit('scroll', { session: state.currentSession, command: 'up', lines }), 50);
-            } else {
-                state.socket.emit('scroll', { session: state.currentSession, command: 'up', lines });
-            }
-        } else if (state.inCopyMode) {
-            state.socket.emit('scroll', { session: state.currentSession, command: 'down', lines });
+function getOrCreateTerminal(session) {
+    // Get existing terminal for session or create new one
+    if (!state.sessionTerminals[session]) {
+        createTerminalForSession(session);
+    }
+    return state.sessionTerminals[session];
+}
+
+function initTerminal() {
+    // Nothing to do here now - terminals created on demand
+}
+
+function attachTerminal(session) {
+    // Hide all terminal containers
+    Object.keys(state.sessionTerminals).forEach(s => {
+        if (state.sessionTerminals[s].container) {
+            state.sessionTerminals[s].container.style.display = 'none';
         }
-    }, { passive: false, capture: true });
+    });
+    
+    // Get or create terminal for this session
+    const { terminal, fitAddon, container } = getOrCreateTerminal(session);
+    
+    // Show this terminal's container
+    container.style.display = 'block';
+    
+    // Update state references
+    state.terminal = terminal;
+    state.fitAddon = fitAddon;
     
     setTimeout(() => {
-        state.fitAddon.fit();
-        state.terminal.focus();
+        fitAddon.fit();
+        terminal.focus();
     }, 100);
 }
 
@@ -316,15 +321,14 @@ function renderSessionList() {
         return;
     }
     
-    dom.sessionList.innerHTML = state.sessions.map(session => `
-        <div class="session-item ${session === state.currentSession ? 'session-item--active' : ''}" 
-             onclick="selectSession('${session}')">
-            <span class="session-item__name">${session}</span>
-            <div class="session-item__actions">
-                <button class="btn btn--danger btn--icon" onclick="event.stopPropagation(); deleteSession('${session}')" title="Delete">×</button>
-            </div>
-        </div>
-    `).join('');
+    dom.sessionList.innerHTML = state.sessions.map(session => 
+        '<div class="session-item ' + (session === state.currentSession ? 'session-item--active' : '') + '" onclick="selectSession(\'' + session + '\')">' +
+            '<span class="session-item__name">' + session + '</span>' +
+            '<div class="session-item__actions">' +
+                '<button class="btn btn--danger btn--icon" onclick="event.stopPropagation(); deleteSession(\'' + session + '\')" title="Delete">×</button>' +
+            '</div>' +
+        '</div>'
+    ).join('');
 }
 
 async function selectSession(session) {
@@ -337,7 +341,7 @@ async function selectSession(session) {
     dom.terminalContainer.style.display = 'block';
     dom.terminalTitle.textContent = session;
     
-    attachTerminal();
+    attachTerminal(session);
     renderSessionList();
     renderQuickCommands();
     
@@ -370,6 +374,9 @@ async function createSession() {
         
         if (data.status === 'ok') {
             hideModal('newSessionModal');
+            document.getElementById('sessionName').value = '';
+            document.getElementById('sessionCwd').value = '';
+            document.getElementById('sessionCmd').value = '';
             await refreshSessions();
             selectSession(data.session);
         } else {
@@ -385,10 +392,21 @@ async function deleteSession(session) {
     
     try {
         await fetch('/api/sessions/' + session, { method: 'DELETE' });
+        
+        // Cleanup terminal instance and container for this session
+        if (state.sessionTerminals[session]) {
+            state.sessionTerminals[session].terminal.dispose();
+            if (state.sessionTerminals[session].container) {
+                state.sessionTerminals[session].container.remove();
+            }
+            delete state.sessionTerminals[session];
+        }
+        
         if (state.currentSession === session) {
             state.currentSession = null;
             dom.terminalPlaceholder.style.display = 'flex';
             dom.terminalContainer.style.display = 'none';
+            dom.terminalTitle.textContent = 'Terminal';
         }
         await refreshSessions();
     } catch (error) {
@@ -457,6 +475,8 @@ async function addCommand() {
             state.customCommands[state.currentSession] = data.commands;
             renderQuickCommands();
             hideModal('addCommandModal');
+            document.getElementById('cmdLabel').value = '';
+            document.getElementById('cmdCommand').value = '';
         }
     } catch (error) {
         console.error('Failed to add command:', error);
@@ -562,7 +582,6 @@ async function deleteDisplay(displayNum) {
 function setLayout(layout) {
     state.layout = layout;
     
-    // Update layout buttons
     document.querySelectorAll('.layout-btn').forEach(btn => {
         btn.classList.toggle('layout-btn--active', btn.dataset.layout === layout);
     });
@@ -570,7 +589,6 @@ function setLayout(layout) {
     const guiCount = parseInt(layout.replace('split-', '')) || 0;
     
     if (layout === 'terminals-only') {
-        // Hide GUI container, terminal takes full width
         dom.guiContainer.style.display = 'none';
         dom.mainResizer.style.display = 'none';
         dom.terminalPanel.style.flex = '1';
@@ -579,13 +597,11 @@ function setLayout(layout) {
             p.visible = false;
         });
     } else {
-        // Terminal on left, GUI container on right
         dom.terminalPanel.style.flex = '0 0 ' + (100 - state.panelSizes.guiContainer) + '%';
         dom.mainResizer.style.display = 'block';
         dom.guiContainer.style.display = 'flex';
         dom.guiContainer.style.flex = '1';
         
-        // Show/hide GUI panels based on count
         for (let i = 0; i < 3; i++) {
             if (i < guiCount) {
                 dom.guiPanels[i].classList.remove('gui-panel--hidden');
@@ -597,7 +613,6 @@ function setLayout(layout) {
             }
         }
         
-        // Show/hide vertical resizers between GUI panels
         const resizers = document.querySelectorAll('.gui-resizer');
         resizers.forEach((r, i) => {
             if (i < guiCount - 1) {
@@ -608,7 +623,6 @@ function setLayout(layout) {
         });
     }
     
-    // Refit terminal
     setTimeout(() => {
         if (state.fitAddon) state.fitAddon.fit();
     }, 100);
@@ -619,7 +633,6 @@ function setLayout(layout) {
 // ============================================================================
 
 function setupResizers() {
-    // Main resizer (between Terminal and GUI container)
     dom.mainResizer.addEventListener('mousedown', (e) => {
         e.preventDefault();
         state.resizing = {
@@ -632,7 +645,6 @@ function setupResizers() {
         dom.mainResizer.classList.add('resizer--active');
     });
     
-    // GUI panel resizers (vertical, between GUI panels)
     document.querySelectorAll('.gui-resizer').forEach((resizer, index) => {
         resizer.addEventListener('mousedown', (e) => {
             e.preventDefault();
@@ -657,7 +669,6 @@ function handleResize(e) {
     if (!state.resizing.active) return;
     
     if (state.resizing.type === 'main') {
-        // Horizontal resize of terminal (left panel)
         const containerWidth = dom.workspaceContent.getBoundingClientRect().width;
         const delta = e.clientX - state.resizing.startPos;
         const newWidth = state.resizing.startSize + delta;
@@ -670,7 +681,6 @@ function handleResize(e) {
             state.panelSizes.guiContainer = 100 - percent;
         }
     } else if (state.resizing.type === 'gui') {
-        // Vertical resize of GUI panels
         const containerHeight = dom.guiContainer.getBoundingClientRect().height;
         const delta = e.clientY - state.resizing.startPos;
         const panel = dom.guiPanels[state.resizing.index];
@@ -706,17 +716,10 @@ function toggleFullscreen(panelIndex) {
     const panelState = state.guiPanels[panelIndex];
     
     if (panelState.fullscreen) {
-        // Exit fullscreen
         panel.classList.remove('gui-panel--fullscreen');
         dom.fullscreenOverlay.classList.remove('fullscreen-overlay--visible');
         panelState.fullscreen = false;
-        
-        // Restore to container if it was detached before fullscreen
-        if (!panelState.detached) {
-            // Already in container
-        }
     } else {
-        // Enter fullscreen
         panel.classList.add('gui-panel--fullscreen');
         dom.fullscreenOverlay.classList.add('fullscreen-overlay--visible');
         panelState.fullscreen = true;
@@ -728,12 +731,10 @@ function toggleDetach(panelIndex) {
     const panelState = state.guiPanels[panelIndex];
     
     if (panelState.fullscreen) {
-        // Exit fullscreen first
         toggleFullscreen(panelIndex);
     }
     
     if (panelState.detached) {
-        // Re-attach to container
         panel.classList.remove('gui-panel--detached');
         panel.style.position = '';
         panel.style.top = '';
@@ -742,13 +743,11 @@ function toggleDetach(panelIndex) {
         panel.style.height = '';
         panelState.detached = false;
         
-        // Move back to container
         const guiCount = parseInt(state.layout.replace('split-', '')) || 0;
         if (panelIndex < guiCount) {
             panel.classList.remove('gui-panel--hidden');
         }
     } else {
-        // Detach and make floating
         const rect = panel.getBoundingClientRect();
         panel.classList.add('gui-panel--detached');
         panel.style.position = 'fixed';
@@ -758,7 +757,6 @@ function toggleDetach(panelIndex) {
         panel.style.height = rect.height + 'px';
         panelState.detached = true;
         
-        // Setup drag on header
         const header = panel.querySelector('.gui-panel__header');
         header.addEventListener('mousedown', (e) => startDrag(e, panelIndex));
     }
@@ -766,7 +764,7 @@ function toggleDetach(panelIndex) {
 
 function startDrag(e, panelIndex) {
     if (!state.guiPanels[panelIndex].detached) return;
-    if (e.target.tagName === 'BUTTON') return; // Don't drag when clicking buttons
+    if (e.target.tagName === 'BUTTON') return;
     
     const panel = dom.guiPanels[panelIndex];
     const rect = panel.getBoundingClientRect();
@@ -941,7 +939,6 @@ function escapeHtml(text) {
 // ============================================================================
 
 function setupEventListeners() {
-    dom.socketInput.addEventListener('change', saveConfig);
     dom.prefixInput.addEventListener('change', saveConfig);
     
     window.addEventListener('resize', () => {
@@ -961,10 +958,8 @@ function setupEventListeners() {
         });
     });
     
-    // Escape to close modals or exit fullscreen
     document.addEventListener('keydown', e => {
         if (e.key === 'Escape') {
-            // Check for fullscreen panels first
             const fullscreenPanel = state.guiPanels.findIndex(p => p.fullscreen);
             if (fullscreenPanel >= 0) {
                 toggleFullscreen(fullscreenPanel);
@@ -978,7 +973,6 @@ function setupEventListeners() {
         btn.addEventListener('click', () => setLayout(btn.dataset.layout));
     });
     
-    // Click on fullscreen overlay to exit
     dom.fullscreenOverlay.addEventListener('click', () => {
         const fullscreenPanel = state.guiPanels.findIndex(p => p.fullscreen);
         if (fullscreenPanel >= 0) {
