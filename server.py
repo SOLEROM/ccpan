@@ -80,7 +80,31 @@ def create_app():
 
 
 def main():
+    import argparse
+    
+    parser = argparse.ArgumentParser(description='Tmux Control Panel v4 - Multi-Display Terminal Manager')
+    parser.add_argument('--public', action='store_true', 
+                        help='Make server accessible on local network (0.0.0.0). Default is localhost only.')
+    parser.add_argument('--port', type=int, default=5000,
+                        help='Port to run server on (default: 5000)')
+    args = parser.parse_args()
+    
+    host = '0.0.0.0' if args.public else '127.0.0.1'
+    port = args.port
+    
     app, socketio = create_app()
+    
+    # Get local IP for display if public
+    local_ip = ''
+    if args.public:
+        import socket
+        try:
+            s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            s.connect(('8.8.8.8', 80))
+            local_ip = s.getsockname()[0]
+            s.close()
+        except:
+            local_ip = 'your-local-ip'
     
     print(f"""
 ╔══════════════════════════════════════════════════════════════════╗
@@ -95,8 +119,15 @@ def main():
 ╚══════════════════════════════════════════════════════════════════╝
 """)
     
-    print("Server starting on http://127.0.0.1:5000")
-    socketio.run(app, host='127.0.0.1', port=5000, debug=False)
+    if args.public:
+        print(f"Server starting on http://{host}:{port}")
+        print(f"Access from local network: http://{local_ip}:{port}")
+        print(f"\n⚠️  WARNING: Server is accessible from your local network!")
+    else:
+        print(f"Server starting on http://{host}:{port}")
+        print(f"Use --public flag to make accessible on local network")
+    
+    socketio.run(app, host=host, port=port, debug=False)
 
 
 if __name__ == '__main__':
