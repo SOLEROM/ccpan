@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Tmux Control Panel v4</title>
+    <title>Tmux Control Panel v2</title>
     
     <!-- xterm.js -->
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/xterm@5.3.0/css/xterm.css">
@@ -11,291 +11,516 @@
     <script src="https://cdn.jsdelivr.net/npm/xterm-addon-fit@0.8.0/lib/xterm-addon-fit.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/xterm-addon-web-links@0.9.0/lib/xterm-addon-web-links.js"></script>
     
-    <!-- Socket.IO -->
+    <!-- Socket.IO client -->
     <script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
     
-    <!-- Styles -->
-    <link rel="stylesheet" href="/static/css/main.css">
+    <style>
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+        
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
+            background: #0d1117;
+            color: #c9d1d9;
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+        }
+        
+        header {
+            background: #161b22;
+            border-bottom: 1px solid #30363d;
+            padding: 12px 20px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+        }
+        
+        header h1 {
+            font-size: 1.25rem;
+            font-weight: 600;
+            color: #f0f6fc;
+        }
+        
+        .status-indicator {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            font-size: 0.875rem;
+        }
+        
+        .status-dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background: #f85149;
+            transition: background 0.3s;
+        }
+        
+        .status-dot.connected {
+            background: #3fb950;
+        }
+        
+        .main-container {
+            display: flex;
+            flex: 1;
+            overflow: hidden;
+        }
+        
+        .sidebar {
+            width: 280px;
+            background: #161b22;
+            border-right: 1px solid #30363d;
+            display: flex;
+            flex-direction: column;
+            flex-shrink: 0;
+        }
+        
+        .sidebar-header {
+            padding: 16px;
+            border-bottom: 1px solid #30363d;
+        }
+        
+        .sidebar-header h2 {
+            font-size: 0.875rem;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            color: #8b949e;
+            margin-bottom: 12px;
+        }
+        
+        .btn {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            gap: 6px;
+            padding: 8px 16px;
+            border: none;
+            border-radius: 6px;
+            font-size: 0.875rem;
+            font-weight: 500;
+            cursor: pointer;
+            transition: all 0.15s;
+        }
+        
+        .btn-primary {
+            background: #238636;
+            color: #fff;
+        }
+        
+        .btn-primary:hover {
+            background: #2ea043;
+        }
+        
+        .btn-secondary {
+            background: #21262d;
+            color: #c9d1d9;
+            border: 1px solid #30363d;
+        }
+        
+        .btn-secondary:hover {
+            background: #30363d;
+            border-color: #8b949e;
+        }
+        
+        .btn-danger {
+            background: #21262d;
+            color: #f85149;
+            border: 1px solid #30363d;
+        }
+        
+        .btn-danger:hover {
+            background: #da3633;
+            color: #fff;
+            border-color: #da3633;
+        }
+        
+        .btn-sm {
+            padding: 4px 10px;
+            font-size: 0.75rem;
+        }
+        
+        .session-list {
+            flex: 1;
+            overflow-y: auto;
+            padding: 8px;
+        }
+        
+        .session-item {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 10px 12px;
+            border-radius: 6px;
+            cursor: pointer;
+            transition: all 0.15s;
+            margin-bottom: 4px;
+        }
+        
+        .session-item:hover {
+            background: #21262d;
+        }
+        
+        .session-item.active {
+            background: #1f6feb;
+        }
+        
+        .session-name {
+            font-size: 0.875rem;
+            font-weight: 500;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+        
+        .session-actions {
+            display: flex;
+            gap: 4px;
+            opacity: 0;
+            transition: opacity 0.15s;
+        }
+        
+        .session-item:hover .session-actions {
+            opacity: 1;
+        }
+        
+        .terminal-container {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+        }
+        
+        .terminal-header {
+            background: #161b22;
+            border-bottom: 1px solid #30363d;
+            padding: 8px 16px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+        }
+        
+        .terminal-title {
+            font-size: 0.875rem;
+            font-weight: 600;
+            color: #f0f6fc;
+        }
+        
+        .terminal-controls {
+            display: flex;
+            gap: 8px;
+        }
+        
+        .terminal-wrapper {
+            flex: 1;
+            padding: 4px;
+            background: #0a0a0a;
+            position: relative;
+            overflow: hidden;
+        }
+        
+        #terminal {
+            width: 100%;
+            height: 100%;
+        }
+        
+        /* Custom scrollbar for xterm */
+        .xterm-viewport::-webkit-scrollbar {
+            width: 10px;
+        }
+        
+        .xterm-viewport::-webkit-scrollbar-track {
+            background: #1a1a2e;
+        }
+        
+        .xterm-viewport::-webkit-scrollbar-thumb {
+            background: #4a4a6a;
+            border-radius: 5px;
+        }
+        
+        .xterm-viewport::-webkit-scrollbar-thumb:hover {
+            background: #6a6a8a;
+        }
+        
+        .quick-commands {
+            background: #161b22;
+            border-top: 1px solid #30363d;
+            padding: 12px 16px;
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+            align-items: center;
+        }
+        
+        .quick-commands label {
+            font-size: 0.75rem;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            color: #8b949e;
+            margin-right: 8px;
+        }
+        
+        .no-session {
+            flex: 1;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            flex-direction: column;
+            gap: 16px;
+            color: #8b949e;
+        }
+        
+        .no-session svg {
+            width: 64px;
+            height: 64px;
+            opacity: 0.5;
+        }
+        
+        /* Modal */
+        .modal-overlay {
+            display: none;
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: rgba(0, 0, 0, 0.7);
+            z-index: 1000;
+            align-items: center;
+            justify-content: center;
+        }
+        
+        .modal-overlay.show {
+            display: flex;
+        }
+        
+        .modal {
+            background: #161b22;
+            border: 1px solid #30363d;
+            border-radius: 12px;
+            width: 100%;
+            max-width: 480px;
+            padding: 24px;
+        }
+        
+        .modal h3 {
+            font-size: 1.25rem;
+            font-weight: 600;
+            margin-bottom: 20px;
+            color: #f0f6fc;
+        }
+        
+        .form-group {
+            margin-bottom: 16px;
+        }
+        
+        .form-group label {
+            display: block;
+            font-size: 0.875rem;
+            font-weight: 500;
+            margin-bottom: 6px;
+            color: #c9d1d9;
+        }
+        
+        .form-group input {
+            width: 100%;
+            padding: 10px 12px;
+            background: #0d1117;
+            border: 1px solid #30363d;
+            border-radius: 6px;
+            font-size: 0.875rem;
+            color: #c9d1d9;
+        }
+        
+        .form-group input:focus {
+            outline: none;
+            border-color: #1f6feb;
+            box-shadow: 0 0 0 3px rgba(31, 111, 235, 0.3);
+        }
+        
+        .form-group small {
+            display: block;
+            margin-top: 4px;
+            font-size: 0.75rem;
+            color: #8b949e;
+        }
+        
+        .modal-actions {
+            display: flex;
+            justify-content: flex-end;
+            gap: 12px;
+            margin-top: 24px;
+        }
+        
+        /* Animations */
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.5; }
+        }
+        
+        .connecting {
+            animation: pulse 1.5s infinite;
+        }
+    </style>
 </head>
 <body>
-    <!-- Header -->
-    <header class="header">
-        <div class="header__brand">
-            <h1 class="header__logo">
-                <span class="header__logo-icon">⌨️</span>
-                Tmux Control Panel
-            </h1>
-        </div>
-        
-        <div class="header__config">
-            <div class="config-field">
-                <label class="config-field__label">Socket</label>
-                <input type="text" id="socketInput" class="config-field__input" value="control-panel" title="tmux socket name">
-            </div>
-            <div class="config-field">
-                <label class="config-field__label">Prefix</label>
-                <input type="text" id="prefixInput" class="config-field__input" value="cp-" title="Session name prefix">
-            </div>
-        </div>
-        
-        <div class="header__status">
+    <header>
+        <h1>🖥️ Tmux Control Panel v3</h1>
+        <div class="status-indicator">
             <span class="status-dot" id="statusDot"></span>
             <span id="statusText">Disconnected</span>
         </div>
     </header>
     
-    <!-- Main Layout -->
-    <div class="main">
-        <!-- Sidebar -->
+    <div class="main-container">
         <aside class="sidebar">
-            <!-- Sessions Section -->
-            <div class="sidebar__section">
-                <div class="sidebar__header">
-                    <span class="sidebar__title">Sessions</span>
-                    <button class="btn btn--primary btn--sm" onclick="showModal('newSessionModal')">+ New</button>
-                </div>
-                <div class="sidebar__content">
-                    <div class="session-list" id="sessionList">
-                        <div class="empty-message">No sessions</div>
-                    </div>
-                </div>
+            <div class="sidebar-header">
+                <h2>Sessions</h2>
+                <button class="btn btn-primary" style="width: 100%;" onclick="showNewSessionModal()">
+                    <span>+</span> New Session
+                </button>
+            </div>
+            <div class="session-list" id="sessionList">
+                <!-- Sessions will be populated here -->
             </div>
             
-            <!-- Displays Section -->
-            <div class="sidebar__section">
-                <div class="sidebar__header">
-                    <span class="sidebar__title">X11 Displays</span>
-                    <button class="btn btn--success btn--sm" onclick="showModal('newDisplayModal')">+ New</button>
-                </div>
-                <div class="sidebar__content">
-                    <div class="display-list" id="displayList">
-                        <div class="empty-message">No displays</div>
-                    </div>
-                </div>
+            <!-- X11 Apps Section -->
+            <div class="sidebar-header" style="margin-top: 20px; border-top: 1px solid #30363d; padding-top: 16px;">
+                <h2>🖼️ GUI Apps</h2>
+                <button class="btn btn-primary" style="width: 100%;" onclick="showX11Modal()">
+                    <span>+</span> Launch App
+                </button>
             </div>
-            
-            <!-- Tips -->
-            <div class="sidebar__section" style="padding: 12px;">
-                <details class="tips-panel">
-                    <summary class="tips-panel__toggle">💡 GUI Tips</summary>
-                    <div class="tips-panel__content tips-panel__content--visible">
-                        <div class="tips-panel__item">
-                            <strong>1.</strong> Create a display (e.g., :99)
-                        </div>
-                        <div class="tips-panel__item">
-                            <strong>2.</strong> Connect GUI panel to display
-                        </div>
-                        <div class="tips-panel__item">
-                            <strong>3.</strong> In terminal, run:<br>
-                            <code>export DISPLAY=:99</code>
-                        </div>
-                        <div class="tips-panel__item">
-                            <strong>4.</strong> Launch app: <code>xeyes &</code>
-                        </div>
-                        <div class="tips-panel__item" style="margin-top: 8px; padding-top: 8px; border-top: 1px solid var(--border-primary);">
-                            <strong>Or:</strong> Use "Bind" on GUI panel header
-                        </div>
-                    </div>
-                </details>
+            <div class="session-list" id="x11AppList">
+                <!-- X11 apps will be listed here -->
             </div>
         </aside>
         
-        <!-- Workspace -->
-        <main class="workspace" id="workspace">
-            <!-- Toolbar -->
-            <div class="workspace__toolbar">
-                <div class="layout-controls">
-                    <span class="layout-controls__label">Layout</span>
-                    <button class="layout-btn layout-btn--active" data-layout="terminals-only" title="Terminals Only">
-                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                            <rect x="3" y="3" width="18" height="18" rx="2"/>
-                        </svg>
-                    </button>
-                    <button class="layout-btn" data-layout="split-1" title="Terminal + 1 GUI">
-                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                            <rect x="3" y="3" width="18" height="18" rx="2"/>
-                            <line x1="12" y1="3" x2="12" y2="21"/>
-                        </svg>
-                    </button>
-                    <button class="layout-btn" data-layout="split-2" title="Terminal + 2 GUI">
-                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                            <rect x="3" y="3" width="18" height="18" rx="2"/>
-                            <line x1="9" y1="3" x2="9" y2="21"/>
-                            <line x1="15" y1="3" x2="15" y2="21"/>
-                        </svg>
-                    </button>
-                    <button class="layout-btn" data-layout="split-3" title="Terminal + 3 GUI">
-                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                            <rect x="3" y="3" width="18" height="18" rx="2"/>
-                            <line x1="12" y1="3" x2="12" y2="21"/>
-                            <line x1="12" y1="12" x2="21" y2="12"/>
-                        </svg>
-                    </button>
+        <main class="terminal-container" id="terminalContainer">
+            <div class="no-session" id="noSession">
+                <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M8 9l3 3-3 3m5 0h3M5 20h14a2 2 0 002-2V6a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
+                </svg>
+                <p>Select a session or create a new one</p>
+            </div>
+            
+            <div id="terminalPanel" style="display: none; flex: 1; display: flex; flex-direction: column;">
+                <div class="terminal-header">
+                    <span class="terminal-title" id="terminalTitle">Session</span>
+                    <div class="terminal-controls">
+                        <button class="btn btn-primary btn-sm" id="guiToggleBtn" onclick="toggleSessionDisplay()" title="Enable GUI apps in this session">
+                            🖼️ Enable GUI
+                        </button>
+                        <button class="btn btn-secondary btn-sm" onclick="sendSignal('SIGINT')" title="Send Ctrl+C">
+                            ⏹ Stop
+                        </button>
+                        <button class="btn btn-secondary btn-sm" onclick="sendSignal('SIGTSTP')" title="Send Ctrl+Z">
+                            ⏸ Suspend
+                        </button>
+                        <button class="btn btn-secondary btn-sm" onclick="clearTerminal()" title="Clear screen">
+                            🔄 Clear
+                        </button>
+                        <button class="btn btn-danger btn-sm" onclick="deleteCurrentSession()">
+                            🗑️ Delete
+                        </button>
+                    </div>
                 </div>
                 
-                <div style="display: flex; gap: 8px;">
-                    <button class="btn btn--secondary btn--sm" onclick="refreshSessions()">↻ Refresh</button>
+                <div class="terminal-wrapper">
+                    <div id="terminal"></div>
+                </div>
+                
+                <div class="quick-commands" id="quickCommands">
+                    <label>Quick Commands:</label>
+                    <button class="btn btn-secondary btn-sm" onclick="showAddCommandModal()">
+                        + Add
+                    </button>
                 </div>
             </div>
             
-            <!-- Workspace Content -->
-            <div class="workspace__content workspace__content--terminals-only" id="workspaceContent">
-                <!-- Terminal Panel (left side) -->
-                <div class="terminal-panel" id="terminalPanel">
-                    <div class="terminal-panel__header">
-                        <span class="terminal-panel__title" id="terminalTitle">No session selected</span>
-                        <div class="terminal-panel__controls">
-                            <button class="btn btn--secondary btn--sm" onclick="sendSignal('SIGINT')" title="Ctrl+C">⏹ Stop</button>
-                            <button class="btn btn--secondary btn--sm" onclick="sendSignal('SIGTSTP')" title="Ctrl+Z">⏸ Suspend</button>
-                            <button class="btn btn--secondary btn--sm" onclick="clearTerminal()">🔄 Clear</button>
-                            <button class="btn btn--danger btn--sm" onclick="deleteSession(state.currentSession)" id="deleteSessionBtn">🗑️</button>
-                        </div>
-                    </div>
-                    <div class="terminal-panel__body" id="terminalBody">
-                        <div class="terminal-panel__placeholder" id="terminalPlaceholder">
-                            <div class="terminal-panel__placeholder-icon">⌨️</div>
-                            <div class="terminal-panel__placeholder-text">Select or create a session</div>
-                        </div>
-                        <div id="terminalContainer" style="display: none; width: 100%; height: 100%;"></div>
-                    </div>
-                    <div class="quick-commands" id="quickCommands">
-                        <span class="quick-commands__label">Quick:</span>
-                        <button class="btn btn--secondary btn--sm" onclick="showModal('addCommandModal')">+ Add</button>
+            <!-- Session X11 GUI Panel -->
+            <div id="sessionX11Panel" style="display: none; border-top: 2px solid #30363d; background: #161b22; padding: 16px; margin-top: 10px;">
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
+                    <h3 style="margin: 0; color: #58a6ff;">🖼️ Session GUI Display <span id="sessionDisplayInfo" style="font-size: 12px; color: #8b949e;"></span></h3>
+                    <div>
+                        <select id="displaySizeSelect" onchange="resizeSessionDisplay()" style="padding: 4px 8px; border-radius: 4px; background: #21262d; color: #c9d1d9; border: 1px solid #30363d; margin-right: 8px;">
+                            <option value="800x600">800×600</option>
+                            <option value="1024x768">1024×768</option>
+                            <option value="1280x800" selected>1280×800</option>
+                            <option value="1440x900">1440×900</option>
+                            <option value="1920x1080">1920×1080</option>
+                        </select>
+                        <button class="btn btn-secondary btn-sm" onclick="refreshSessionDisplay()" title="Refresh display">🔄</button>
+                        <button class="btn btn-danger btn-sm" onclick="disableSessionDisplay()">✕ Disable GUI</button>
                     </div>
                 </div>
-                
-                <!-- Main Resizer (between Terminal and GUI container) -->
-                <div class="resizer resizer--horizontal" id="mainResizer" style="display: none;"></div>
-                
-                <!-- GUI Container (right side, stacks vertically) -->
-                <div class="gui-container" id="guiContainer" style="display: none;">
-                    <!-- GUI Panel 1 -->
-                    <div class="gui-panel gui-panel--hidden" id="guiPanel1">
-                        <div class="gui-panel__header">
-                            <span class="gui-panel__title">
-                                🖼️ GUI 1 <span class="gui-panel__display-num">Not connected</span>
-                            </span>
-                            <div class="gui-panel__controls">
-                                <button class="btn btn--primary btn--sm" onclick="showConnectDisplayModal(0)">Connect</button>
-                                <button class="btn btn--secondary btn--sm" onclick="bindDisplayToSession(state.guiPanels[0].displayNum)" title="Set DISPLAY in terminal">Bind</button>
-                                <button class="btn btn--secondary btn--sm" onclick="toggleFullscreen(0)" title="Fullscreen">⛶</button>
-                                <button class="btn btn--secondary btn--sm" onclick="toggleDetach(0)" title="Detach/Pop-out">⧉</button>
-                                <button class="btn btn--danger btn--sm" onclick="disconnectGuiPanel(0)">×</button>
-                            </div>
+                <details style="font-size: 13px; color: #8b949e; margin-bottom: 10px;">
+                    <summary style="cursor: pointer; color: #58a6ff;">💡 Tips for running GUI apps</summary>
+                    <div style="margin-top: 8px; padding: 10px; background: #21262d; border-radius: 6px;">
+                        <p style="margin: 0 0 8px 0;"><strong>Simple apps:</strong> <code>xeyes &</code>, <code>xclock &</code>, <code>xterm &</code></p>
+                        <p style="margin: 0 0 8px 0;"><strong>VS Code:</strong> <code>code --disable-gpu --ozone-platform=x11 . &</code></p>
+                        <p style="margin: 0 0 8px 0;"><strong>Firefox:</strong> <code>firefox --display=$DISPLAY &</code></p>
+                        <p style="margin: 0 0 8px 0;"><strong>Chrome:</strong> <code>google-chrome --disable-gpu --no-sandbox &</code></p>
+                        
+                        <div style="margin-top: 10px; padding: 8px; background: #1a1e24; border-radius: 4px; border-left: 3px solid #58a6ff;">
+                            <strong>🎮 3D/OpenGL apps:</strong><br>
+                            Software rendering is enabled (slow but works). For better performance with 3D apps like FlightGear:<br>
+                            <code style="display: block; margin-top: 4px;">sudo apt install virtualgl</code>
+                            Then run: <code>vglrun fgfs &</code><br>
+                            <small style="color: #6e7681;">Or use: <code>LIBGL_ALWAYS_SOFTWARE=1 fgfs &</code> for software rendering</small>
                         </div>
-                        <div class="gui-panel__body">
-                            <div class="gui-panel__placeholder">
-                                <div class="gui-panel__placeholder-icon">🖼️</div>
-                                <div class="gui-panel__placeholder-text">Click "Connect" to attach a display</div>
-                            </div>
-                        </div>
+                        
+                        <p style="margin: 10px 0 0 0; padding: 8px; background: #1a1e24; border-radius: 4px;">
+                            <strong>⚠️ Note:</strong> If app opens on your main screen instead, start a <strong>new terminal tab</strong> in your session 
+                            (the DISPLAY variable is set when GUI is enabled). Or manually run: <code>export DISPLAY=<span id="currentDisplay">:99</span></code>
+                        </p>
                     </div>
-                    
-                    <!-- Resizer between GUI 1 and GUI 2 -->
-                    <div class="resizer resizer--vertical gui-resizer" data-index="0" style="display: none;"></div>
-                    
-                    <!-- GUI Panel 2 -->
-                    <div class="gui-panel gui-panel--hidden" id="guiPanel2">
-                        <div class="gui-panel__header">
-                            <span class="gui-panel__title">
-                                🖼️ GUI 2 <span class="gui-panel__display-num">Not connected</span>
-                            </span>
-                            <div class="gui-panel__controls">
-                                <button class="btn btn--primary btn--sm" onclick="showConnectDisplayModal(1)">Connect</button>
-                                <button class="btn btn--secondary btn--sm" onclick="bindDisplayToSession(state.guiPanels[1].displayNum)" title="Set DISPLAY in terminal">Bind</button>
-                                <button class="btn btn--secondary btn--sm" onclick="toggleFullscreen(1)" title="Fullscreen">⛶</button>
-                                <button class="btn btn--secondary btn--sm" onclick="toggleDetach(1)" title="Detach/Pop-out">⧉</button>
-                                <button class="btn btn--danger btn--sm" onclick="disconnectGuiPanel(1)">×</button>
-                            </div>
-                        </div>
-                        <div class="gui-panel__body">
-                            <div class="gui-panel__placeholder">
-                                <div class="gui-panel__placeholder-icon">🖼️</div>
-                                <div class="gui-panel__placeholder-text">Click "Connect" to attach a display</div>
-                            </div>
-                        </div>
-                    </div>
-                    
-                    <!-- Resizer between GUI 2 and GUI 3 -->
-                    <div class="resizer resizer--vertical gui-resizer" data-index="1" style="display: none;"></div>
-                    
-                    <!-- GUI Panel 3 -->
-                    <div class="gui-panel gui-panel--hidden" id="guiPanel3">
-                        <div class="gui-panel__header">
-                            <span class="gui-panel__title">
-                                🖼️ GUI 3 <span class="gui-panel__display-num">Not connected</span>
-                            </span>
-                            <div class="gui-panel__controls">
-                                <button class="btn btn--primary btn--sm" onclick="showConnectDisplayModal(2)">Connect</button>
-                                <button class="btn btn--secondary btn--sm" onclick="bindDisplayToSession(state.guiPanels[2].displayNum)" title="Set DISPLAY in terminal">Bind</button>
-                                <button class="btn btn--secondary btn--sm" onclick="toggleFullscreen(2)" title="Fullscreen">⛶</button>
-                                <button class="btn btn--secondary btn--sm" onclick="toggleDetach(2)" title="Detach/Pop-out">⧉</button>
-                                <button class="btn btn--danger btn--sm" onclick="disconnectGuiPanel(2)">×</button>
-                            </div>
-                        </div>
-                        <div class="gui-panel__body">
-                            <div class="gui-panel__placeholder">
-                                <div class="gui-panel__placeholder-icon">🖼️</div>
-                                <div class="gui-panel__placeholder-text">Click "Connect" to attach a display</div>
-                            </div>
-                        </div>
-                    </div>
+                </details>
+                <div id="sessionX11Container" style="width: 100%; display: flex; justify-content: center; background: #0d1117; border-radius: 6px; overflow: hidden; min-height: 200px;">
+                    <!-- noVNC canvas will be inserted here -->
+                </div>
+            </div>
+            
+            <!-- Standalone X11 GUI Panel (for launched apps) -->
+            <div id="x11Panel" style="display: none; border-top: 2px solid #30363d; background: #161b22; padding: 16px; margin-top: 10px;">
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
+                    <h3 style="margin: 0; color: #58a6ff;">🖼️ <span id="x11PanelTitle">GUI App</span></h3>
+                    <button class="btn btn-danger btn-sm" onclick="closeX11Panel()">✕ Close</button>
+                </div>
+                <div id="x11Container" style="width: 100%; display: flex; justify-content: center; background: #0d1117; border-radius: 6px; overflow: hidden;">
+                    <!-- noVNC canvas will be inserted here -->
                 </div>
             </div>
         </main>
     </div>
     
-    <!-- Fullscreen Overlay -->
-    <div class="fullscreen-overlay" id="fullscreenOverlay"></div>
-    
     <!-- New Session Modal -->
     <div class="modal-overlay" id="newSessionModal">
         <div class="modal">
-            <h3 class="modal__title">Create New Session</h3>
+            <h3>Create New Session</h3>
             <div class="form-group">
-                <label class="form-group__label" for="sessionName">Session Name</label>
-                <input type="text" id="sessionName" class="form-group__input" placeholder="my-session" autocomplete="off">
-                <span class="form-group__hint">Alphanumeric and hyphens only</span>
-            </div>
-            <div class="form-group">
-                <label class="form-group__label" for="sessionCwd">Working Directory</label>
-                <input type="text" id="sessionCwd" class="form-group__input" placeholder="/home/user/project">
-                <span class="form-group__hint">Optional</span>
+                <label for="sessionName">Session Name</label>
+                <input type="text" id="sessionName" placeholder="my-session" autocomplete="off">
+                <small>Alphanumeric and hyphens only</small>
             </div>
             <div class="form-group">
-                <label class="form-group__label" for="sessionCmd">Initial Command</label>
-                <input type="text" id="sessionCmd" class="form-group__input" placeholder="npm run dev">
-                <span class="form-group__hint">Optional</span>
+                <label for="sessionCwd">Working Directory</label>
+                <input type="text" id="sessionCwd" placeholder="/home/user/project">
+                <small>Optional - defaults to current directory</small>
             </div>
-            <div class="modal__actions">
-                <button class="btn btn--secondary" onclick="hideModal('newSessionModal')">Cancel</button>
-                <button class="btn btn--primary" onclick="createSession()">Create</button>
-            </div>
-        </div>
-    </div>
-    
-    <!-- New Display Modal -->
-    <div class="modal-overlay" id="newDisplayModal">
-        <div class="modal">
-            <h3 class="modal__title">Create X11 Display</h3>
             <div class="form-group">
-                <label class="form-group__label" for="displayNum">Display Number</label>
-                <input type="number" id="displayNum" class="form-group__input" placeholder="99" min="1" max="199">
-                <span class="form-group__hint">e.g., 99 for :99 (leave empty for auto)</span>
+                <label for="sessionCmd">Initial Command</label>
+                <input type="text" id="sessionCmd" placeholder="npm run dev">
+                <small>Optional - command to run on start</small>
             </div>
-            <div class="form-row">
-                <div class="form-group">
-                    <label class="form-group__label" for="displayWidth">Width</label>
-                    <input type="number" id="displayWidth" class="form-group__input" value="1280" min="640" max="3840">
-                </div>
-                <div class="form-group">
-                    <label class="form-group__label" for="displayHeight">Height</label>
-                    <input type="number" id="displayHeight" class="form-group__input" value="800" min="480" max="2160">
-                </div>
-            </div>
-            <div class="modal__actions">
-                <button class="btn btn--secondary" onclick="hideModal('newDisplayModal')">Cancel</button>
-                <button class="btn btn--success" onclick="createDisplay()">Create</button>
+            <div class="modal-actions">
+                <button class="btn btn-secondary" onclick="hideNewSessionModal()">Cancel</button>
+                <button class="btn btn-primary" onclick="createSession()">Create</button>
             </div>
         </div>
     </div>
@@ -303,41 +528,1045 @@
     <!-- Add Command Modal -->
     <div class="modal-overlay" id="addCommandModal">
         <div class="modal">
-            <h3 class="modal__title">Add Quick Command</h3>
+            <h3>Add Quick Command</h3>
             <div class="form-group">
-                <label class="form-group__label" for="cmdLabel">Button Label</label>
-                <input type="text" id="cmdLabel" class="form-group__input" placeholder="Build" autocomplete="off">
+                <label for="cmdLabel">Button Label</label>
+                <input type="text" id="cmdLabel" placeholder="Build" autocomplete="off">
             </div>
             <div class="form-group">
-                <label class="form-group__label" for="cmdCommand">Command</label>
-                <input type="text" id="cmdCommand" class="form-group__input" placeholder="npm run build">
+                <label for="cmdCommand">Command</label>
+                <input type="text" id="cmdCommand" placeholder="npm run build">
             </div>
-            <div class="modal__actions">
-                <button class="btn btn--secondary" onclick="hideModal('addCommandModal')">Cancel</button>
-                <button class="btn btn--primary" onclick="addCommand()">Add</button>
+            <div class="modal-actions">
+                <button class="btn btn-secondary" onclick="hideAddCommandModal()">Cancel</button>
+                <button class="btn btn-primary" onclick="addCommand()">Add</button>
             </div>
         </div>
     </div>
     
-    <!-- Connect Display Modal -->
-    <div class="modal-overlay" id="bindDisplayModal">
+    <!-- X11 App Modal -->
+    <div class="modal-overlay" id="x11Modal">
         <div class="modal">
-            <h3 class="modal__title">Connect to Display</h3>
-            <div class="form-group">
-                <label class="form-group__label" for="connectDisplaySelect">Select Display</label>
-                <select id="connectDisplaySelect" class="form-group__input">
-                    <option disabled>No displays available</option>
-                </select>
-                <span class="form-group__hint">Create a display first if none available</span>
+            <h3>🖼️ Launch GUI Application</h3>
+            <div id="x11DepsWarning" style="display: none; background: #3d1f1f; border: 1px solid #f85149; padding: 12px; border-radius: 6px; margin-bottom: 16px;">
+                <strong style="color: #f85149;">⚠️ Missing Dependencies</strong>
+                <p style="margin: 8px 0 0 0; color: #f0f0f0; font-size: 13px;" id="x11DepsMessage"></p>
             </div>
-            <div class="modal__actions">
-                <button class="btn btn--secondary" onclick="hideModal('bindDisplayModal')">Cancel</button>
-                <button class="btn btn--primary" onclick="connectSelectedDisplay()">Connect</button>
+            <div class="form-group">
+                <label for="x11Command">Application Command</label>
+                <input type="text" id="x11Command" placeholder="xeyes" autocomplete="off">
+                <small>Examples: xeyes, xclock, xterm, firefox</small>
+            </div>
+            <div class="form-group">
+                <label>Window Size</label>
+                <div style="display: flex; gap: 10px;">
+                    <input type="number" id="x11Width" value="400" min="100" max="1920" style="flex: 1;">
+                    <span style="align-self: center;">×</span>
+                    <input type="number" id="x11Height" value="400" min="100" max="1080" style="flex: 1;">
+                </div>
+            </div>
+            <div class="modal-actions">
+                <button class="btn btn-secondary" onclick="hideX11Modal()">Cancel</button>
+                <button class="btn btn-primary" onclick="launchX11App()">Launch</button>
             </div>
         </div>
     </div>
     
-    <!-- Application Script -->
-    <script src="/static/js/app.js"></script>
+    <!-- noVNC scripts -->
+    <script src="https://cdn.jsdelivr.net/npm/@novnc/novnc@1.4.0/lib/rfb.js" type="module"></script>
+
+    <script>
+        // ========================================================================
+        // Global State
+        // ========================================================================
+        
+        let socket = null;
+        let term = null;
+        let fitAddon = null;
+        let currentSession = null;
+        let sessions = [];
+        let customCommands = {};
+        let inCopyMode = false;  // Track if we're in tmux copy-mode
+        
+        // ========================================================================
+        // WebSocket Connection
+        // ========================================================================
+        
+        function connectWebSocket() {
+            updateStatus('connecting');
+            
+            socket = io({
+                transports: ['websocket'],
+                reconnection: true,
+                reconnectionDelay: 1000,
+                reconnectionAttempts: 10
+            });
+            
+            socket.on('connect', () => {
+                console.log('WebSocket connected');
+                updateStatus('connected');
+                refreshSessions();
+            });
+            
+            socket.on('disconnect', () => {
+                console.log('WebSocket disconnected');
+                updateStatus('disconnected');
+            });
+            
+            socket.on('connect_error', (error) => {
+                console.error('Connection error:', error);
+                updateStatus('error');
+            });
+            
+            socket.on('connected', (data) => {
+                console.log('Server acknowledged connection:', data);
+            });
+            
+            socket.on('subscribed', (data) => {
+                console.log('Subscribed to session:', data.session);
+                
+                // Clear terminal for fresh start
+                if (term) {
+                    term.clear();
+                    term.reset();
+                }
+                
+                // Request a resize to force tmux to redraw cleanly
+                setTimeout(() => {
+                    if (socket && socket.connected && term) {
+                        socket.emit('resize', {
+                            session: data.session,
+                            cols: term.cols,
+                            rows: term.rows
+                        });
+                    }
+                }, 100);
+            });
+            
+            socket.on('output', (data) => {
+                if (term && data.session === currentSession) {
+                    term.write(data.data);
+                }
+            });
+            
+            socket.on('error', (data) => {
+                console.error('Server error:', data.message);
+            });
+        }
+        
+        function updateStatus(status) {
+            const dot = document.getElementById('statusDot');
+            const text = document.getElementById('statusText');
+            
+            dot.classList.remove('connected', 'connecting');
+            
+            switch (status) {
+                case 'connected':
+                    dot.classList.add('connected');
+                    text.textContent = 'Connected';
+                    break;
+                case 'connecting':
+                    dot.classList.add('connecting');
+                    text.textContent = 'Connecting...';
+                    break;
+                case 'disconnected':
+                    text.textContent = 'Disconnected';
+                    break;
+                case 'error':
+                    text.textContent = 'Connection Error';
+                    break;
+            }
+        }
+        
+        // ========================================================================
+        // Terminal Setup
+        // ========================================================================
+        
+        function initTerminal() {
+            term = new Terminal({
+                cursorBlink: true,
+                cursorStyle: 'block',
+                fontSize: 14,
+                fontFamily: '"JetBrains Mono", "Fira Code", Consolas, "Courier New", monospace',
+                scrollback: 50000,
+                theme: {
+                    background: '#0a0a0a',
+                    foreground: '#c8c8c8',
+                    cursor: '#4ecca3',
+                    cursorAccent: '#0a0a0a',
+                    selection: 'rgba(78, 204, 163, 0.3)',
+                    black: '#1a1a2e',
+                    red: '#ff6b6b',
+                    green: '#4ecca3',
+                    yellow: '#feca57',
+                    blue: '#54a0ff',
+                    magenta: '#c792ea',
+                    cyan: '#48dbfb',
+                    white: '#c8c8c8',
+                    brightBlack: '#4a4a6a',
+                    brightRed: '#ff8787',
+                    brightGreen: '#69e7b5',
+                    brightYellow: '#fed373',
+                    brightBlue: '#76b5ff',
+                    brightMagenta: '#d4a8ef',
+                    brightCyan: '#6be5fc',
+                    brightWhite: '#ffffff'
+                }
+            });
+            
+            fitAddon = new FitAddon.FitAddon();
+            const webLinksAddon = new WebLinksAddon.WebLinksAddon();
+            
+            term.loadAddon(fitAddon);
+            term.loadAddon(webLinksAddon);
+            
+            // Handle keyboard input - send via WebSocket
+            term.onData((data) => {
+                if (currentSession && socket && socket.connected) {
+                    // If in copy-mode, exit it first when user types
+                    if (inCopyMode) {
+                        socket.emit('scroll', { session: currentSession, command: 'exit' });
+                        inCopyMode = false;
+                    }
+                    socket.emit('input', {
+                        session: currentSession,
+                        keys: data
+                    });
+                }
+            });
+            
+            // Handle resize
+            term.onResize(({ cols, rows }) => {
+                if (currentSession && socket && socket.connected) {
+                    socket.emit('resize', {
+                        session: currentSession,
+                        cols: cols,
+                        rows: rows
+                    });
+                }
+            });
+        }
+        
+        function attachTerminal(session) {
+            const container = document.getElementById('terminal');
+            
+            // Clear previous terminal if exists
+            if (term._core) {
+                container.innerHTML = '';
+            }
+            
+            // Open terminal
+            term.open(container);
+            term.clear();
+            
+            // Disable mouse reporting in xterm.js core
+            if (term._core && term._core._coreMouseService) {
+                term._core._coreMouseService.activeProtocol = 'NONE';
+            }
+            if (term._core && term._core.mouseService) {
+                term._core.mouseService.activeProtocol = 'NONE';
+            }
+            
+            // Fit to container and setup scroll
+            setTimeout(() => {
+                fitAddon.fit();
+                term.focus();
+                
+                // Handle mouse wheel - use tmux's copy-mode for scrollback
+                container.addEventListener('wheel', function(e) {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    
+                    if (!currentSession || !socket || !socket.connected) {
+                        return false;
+                    }
+                    
+                    const scrollUp = e.deltaY < 0;
+                    const lines = Math.max(1, Math.abs(Math.round(e.deltaY / 30)));
+                    
+                    if (scrollUp) {
+                        if (!inCopyMode) {
+                            // Enter tmux copy-mode
+                            socket.emit('scroll', { session: currentSession, command: 'enter' });
+                            inCopyMode = true;
+                            // Small delay then scroll
+                            setTimeout(() => {
+                                socket.emit('scroll', { session: currentSession, command: 'up', lines: lines });
+                            }, 50);
+                        } else {
+                            // Scroll up in copy-mode
+                            socket.emit('scroll', { session: currentSession, command: 'up', lines: lines });
+                        }
+                    } else {
+                        if (inCopyMode) {
+                            // Scroll down in copy-mode
+                            socket.emit('scroll', { session: currentSession, command: 'down', lines: lines });
+                        }
+                    }
+                    
+                    return false;
+                }, { passive: false, capture: true });
+                
+            }, 100);
+        }
+        
+        // ========================================================================
+        // Session Management
+        // ========================================================================
+        
+        async function refreshSessions() {
+            try {
+                const response = await fetch('/api/sessions');
+                const data = await response.json();
+                sessions = data.sessions;
+                renderSessionList();
+                
+                // Also refresh commands
+                const cmdResponse = await fetch('/api/commands');
+                customCommands = await cmdResponse.json();
+                
+                if (currentSession) {
+                    renderQuickCommands();
+                }
+            } catch (error) {
+                console.error('Failed to refresh sessions:', error);
+            }
+        }
+        
+        function renderSessionList() {
+            const list = document.getElementById('sessionList');
+            
+            if (sessions.length === 0) {
+                list.innerHTML = '<p style="padding: 16px; color: #8b949e; text-align: center;">No sessions</p>';
+                return;
+            }
+            
+            list.innerHTML = sessions.map(session => `
+                <div class="session-item ${session === currentSession ? 'active' : ''}" 
+                     onclick="selectSession('${session}')">
+                    <span class="session-name">${session}</span>
+                    <div class="session-actions">
+                        <button class="btn btn-danger btn-sm" onclick="event.stopPropagation(); deleteSession('${session}')">
+                            ×
+                        </button>
+                    </div>
+                </div>
+            `).join('');
+        }
+        
+        function selectSession(session) {
+            // Unsubscribe from previous session
+            if (currentSession && socket && socket.connected) {
+                socket.emit('unsubscribe', { session: currentSession });
+            }
+            
+            // Hide previous session's display
+            hideSessionDisplay();
+            
+            currentSession = session;
+            
+            // Update UI
+            document.getElementById('noSession').style.display = 'none';
+            document.getElementById('terminalPanel').style.display = 'flex';
+            document.getElementById('terminalTitle').textContent = session;
+            
+            // Attach terminal first
+            attachTerminal(session);
+            
+            // Update session list highlight
+            renderSessionList();
+            
+            // Render quick commands
+            renderQuickCommands();
+            
+            // Check if this session has a GUI display
+            checkSessionDisplay();
+            
+            // Fit terminal, get size, THEN subscribe with correct dimensions
+            setTimeout(() => {
+                fitAddon.fit();
+                
+                const cols = term.cols;
+                const rows = term.rows;
+                
+                console.log(`Terminal size: ${cols}x${rows}`);
+                
+                // Subscribe with correct size
+                if (socket && socket.connected) {
+                    socket.emit('subscribe', { 
+                        session: session,
+                        cols: cols,
+                        rows: rows
+                    });
+                }
+            }, 150);
+        }
+        
+        async function createSession() {
+            const name = document.getElementById('sessionName').value.trim();
+            const cwd = document.getElementById('sessionCwd').value.trim();
+            const cmd = document.getElementById('sessionCmd').value.trim();
+            
+            if (!name) {
+                alert('Please enter a session name');
+                return;
+            }
+            
+            try {
+                const response = await fetch('/api/sessions', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        name: name,
+                        cwd: cwd || undefined,
+                        command: cmd || undefined
+                    })
+                });
+                
+                const data = await response.json();
+                
+                if (data.status === 'ok') {
+                    hideNewSessionModal();
+                    await refreshSessions();
+                    selectSession(data.session);
+                } else {
+                    alert('Failed to create session: ' + data.message);
+                }
+            } catch (error) {
+                console.error('Failed to create session:', error);
+                alert('Failed to create session');
+            }
+        }
+        
+        async function deleteSession(session) {
+            if (!confirm(`Delete session "${session}"?`)) {
+                return;
+            }
+            
+            try {
+                const response = await fetch(`/api/sessions/${session}`, {
+                    method: 'DELETE'
+                });
+                
+                if (response.ok) {
+                    if (currentSession === session) {
+                        currentSession = null;
+                        document.getElementById('noSession').style.display = 'flex';
+                        document.getElementById('terminalPanel').style.display = 'none';
+                    }
+                    await refreshSessions();
+                }
+            } catch (error) {
+                console.error('Failed to delete session:', error);
+            }
+        }
+        
+        function deleteCurrentSession() {
+            if (currentSession) {
+                deleteSession(currentSession);
+            }
+        }
+        
+        // ========================================================================
+        // Terminal Actions
+        // ========================================================================
+        
+        function sendSignal(sig) {
+            if (currentSession && socket && socket.connected) {
+                socket.emit('signal', {
+                    session: currentSession,
+                    signal: sig
+                });
+            }
+        }
+        
+        function clearTerminal() {
+            if (currentSession && socket && socket.connected) {
+                socket.emit('input', {
+                    session: currentSession,
+                    keys: 'clear\r'
+                });
+            }
+        }
+        
+        // ========================================================================
+        // Quick Commands
+        // ========================================================================
+        
+        function renderQuickCommands() {
+            const container = document.getElementById('quickCommands');
+            const sessionCommands = customCommands[currentSession] || [];
+            
+            let html = '<label>Quick Commands:</label>';
+            
+            sessionCommands.forEach((cmd, index) => {
+                html += `
+                    <button class="btn btn-secondary btn-sm" onclick="runCommand('${escapeHtml(cmd.command)}')">
+                        ${escapeHtml(cmd.label)}
+                    </button>
+                    <button class="btn btn-danger btn-sm" onclick="deleteCommand(${index})" style="padding: 4px 6px;">×</button>
+                `;
+            });
+            
+            html += '<button class="btn btn-secondary btn-sm" onclick="showAddCommandModal()">+ Add</button>';
+            
+            container.innerHTML = html;
+        }
+        
+        async function runCommand(command) {
+            if (!currentSession) return;
+            
+            try {
+                await fetch(`/api/sessions/${currentSession}/command`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ command: command })
+                });
+            } catch (error) {
+                console.error('Failed to run command:', error);
+            }
+        }
+        
+        async function addCommand() {
+            const label = document.getElementById('cmdLabel').value.trim();
+            const command = document.getElementById('cmdCommand').value.trim();
+            
+            if (!label || !command || !currentSession) {
+                alert('Please enter both label and command');
+                return;
+            }
+            
+            try {
+                const response = await fetch(`/api/commands/${currentSession}`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ label, command })
+                });
+                
+                const data = await response.json();
+                
+                if (data.status === 'ok') {
+                    customCommands[currentSession] = data.commands;
+                    renderQuickCommands();
+                    hideAddCommandModal();
+                }
+            } catch (error) {
+                console.error('Failed to add command:', error);
+            }
+        }
+        
+        async function deleteCommand(index) {
+            if (!currentSession) return;
+            
+            try {
+                const response = await fetch(`/api/commands/${currentSession}/${index}`, {
+                    method: 'DELETE'
+                });
+                
+                const data = await response.json();
+                
+                if (data.status === 'ok') {
+                    customCommands[currentSession] = data.commands;
+                    renderQuickCommands();
+                }
+            } catch (error) {
+                console.error('Failed to delete command:', error);
+            }
+        }
+        
+        // ========================================================================
+        // Modals
+        // ========================================================================
+        
+        function showNewSessionModal() {
+            document.getElementById('sessionName').value = '';
+            document.getElementById('sessionCwd').value = '';
+            document.getElementById('sessionCmd').value = '';
+            document.getElementById('newSessionModal').classList.add('show');
+            document.getElementById('sessionName').focus();
+        }
+        
+        function hideNewSessionModal() {
+            document.getElementById('newSessionModal').classList.remove('show');
+        }
+        
+        function showAddCommandModal() {
+            document.getElementById('cmdLabel').value = '';
+            document.getElementById('cmdCommand').value = '';
+            document.getElementById('addCommandModal').classList.add('show');
+            document.getElementById('cmdLabel').focus();
+        }
+        
+        function hideAddCommandModal() {
+            document.getElementById('addCommandModal').classList.remove('show');
+        }
+        
+        // ========================================================================
+        // Utilities
+        // ========================================================================
+        
+        function escapeHtml(text) {
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
+        }
+        
+        // Handle window resize
+        window.addEventListener('resize', () => {
+            if (term && fitAddon) {
+                fitAddon.fit();
+            }
+        });
+        
+        // Handle Enter key in modals
+        document.getElementById('sessionName').addEventListener('keydown', (e) => {
+            if (e.key === 'Enter') createSession();
+        });
+        
+        document.getElementById('cmdCommand').addEventListener('keydown', (e) => {
+            if (e.key === 'Enter') addCommand();
+        });
+        
+        // Close modals on overlay click
+        document.querySelectorAll('.modal-overlay').forEach(overlay => {
+            overlay.addEventListener('click', (e) => {
+                if (e.target === overlay) {
+                    overlay.classList.remove('show');
+                }
+            });
+        });
+        
+        // Close modals on Escape
+        document.addEventListener('keydown', (e) => {
+            if (e.key === 'Escape') {
+                document.querySelectorAll('.modal-overlay').forEach(overlay => {
+                    overlay.classList.remove('show');
+                });
+            }
+        });
+        
+        // ========================================================================
+        // X11 GUI Apps
+        // ========================================================================
+        
+        let x11Apps = [];
+        let currentX11App = null;
+        let rfbConnection = null;
+        
+        async function checkX11Dependencies() {
+            try {
+                const response = await fetch('/api/x11/check');
+                const data = await response.json();
+                
+                const warning = document.getElementById('x11DepsWarning');
+                const message = document.getElementById('x11DepsMessage');
+                
+                if (data.status === 'missing') {
+                    warning.style.display = 'block';
+                    message.innerHTML = `Missing: ${data.missing.join(', ')}<br><code style="background: #21262d; padding: 4px 8px; border-radius: 4px; display: inline-block; margin-top: 8px;">${data.install_cmd}</code>`;
+                } else {
+                    warning.style.display = 'none';
+                }
+            } catch (error) {
+                console.error('Failed to check X11 dependencies:', error);
+            }
+        }
+        
+        function showX11Modal() {
+            checkX11Dependencies();
+            document.getElementById('x11Modal').classList.add('show');
+            document.getElementById('x11Command').focus();
+        }
+        
+        function hideX11Modal() {
+            document.getElementById('x11Modal').classList.remove('show');
+        }
+        
+        async function launchX11App() {
+            const command = document.getElementById('x11Command').value.trim();
+            const width = parseInt(document.getElementById('x11Width').value) || 400;
+            const height = parseInt(document.getElementById('x11Height').value) || 400;
+            
+            if (!command) {
+                alert('Please enter an application command');
+                return;
+            }
+            
+            try {
+                const response = await fetch('/api/x11/apps', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ command, width, height })
+                });
+                
+                const data = await response.json();
+                
+                if (data.status === 'error') {
+                    alert('Failed to launch app: ' + data.message);
+                    return;
+                }
+                
+                hideX11Modal();
+                await refreshX11Apps();
+                connectToX11App(data.app);
+                
+            } catch (error) {
+                console.error('Failed to launch X11 app:', error);
+                alert('Failed to launch X11 app');
+            }
+        }
+        
+        async function refreshX11Apps() {
+            try {
+                const response = await fetch('/api/x11/apps');
+                const data = await response.json();
+                x11Apps = data.apps || [];
+                renderX11AppList();
+            } catch (error) {
+                console.error('Failed to refresh X11 apps:', error);
+            }
+        }
+        
+        function renderX11AppList() {
+            const list = document.getElementById('x11AppList');
+            
+            if (x11Apps.length === 0) {
+                list.innerHTML = '<p style="padding: 16px; color: #8b949e; text-align: center; font-size: 13px;">No GUI apps running</p>';
+                return;
+            }
+            
+            list.innerHTML = x11Apps.map(app => `
+                <div class="session-item ${currentX11App === app.app_id ? 'active' : ''}" 
+                     onclick="connectToX11App(${JSON.stringify(app).replace(/"/g, '&quot;')})">
+                    <span class="session-name">🖼️ ${escapeHtml(app.command)}</span>
+                    <div class="session-actions">
+                        <button class="btn btn-danger btn-sm" onclick="event.stopPropagation(); stopX11App('${app.app_id}')">
+                            ×
+                        </button>
+                    </div>
+                </div>
+            `).join('');
+        }
+        
+        async function connectToX11App(app) {
+            currentX11App = app.app_id;
+            renderX11AppList();
+            
+            // Show X11 panel
+            document.getElementById('x11Panel').style.display = 'block';
+            document.getElementById('x11PanelTitle').textContent = app.command;
+            
+            const container = document.getElementById('x11Container');
+            container.innerHTML = '';
+            container.style.width = app.width + 'px';
+            container.style.height = app.height + 'px';
+            
+            // Disconnect existing connection
+            if (rfbConnection) {
+                rfbConnection.disconnect();
+                rfbConnection = null;
+            }
+            
+            // Connect via noVNC
+            try {
+                // Dynamic import for noVNC
+                const RFB = (await import('https://cdn.jsdelivr.net/npm/@novnc/novnc@1.4.0/core/rfb.js')).default;
+                
+                const wsUrl = `ws://${window.location.hostname}:${app.ws_port}`;
+                
+                rfbConnection = new RFB(container, wsUrl, {
+                    scaleViewport: false,
+                    resizeSession: false
+                });
+                
+                rfbConnection.addEventListener('connect', () => {
+                    console.log('Connected to VNC');
+                });
+                
+                rfbConnection.addEventListener('disconnect', (e) => {
+                    console.log('Disconnected from VNC:', e.detail);
+                });
+                
+                rfbConnection.addEventListener('credentialsrequired', () => {
+                    console.log('VNC credentials required');
+                });
+                
+            } catch (error) {
+                console.error('Failed to connect to X11 app:', error);
+                container.innerHTML = `<p style="color: #f85149; padding: 20px;">Failed to connect: ${error.message}</p>`;
+            }
+        }
+        
+        async function stopX11App(appId) {
+            if (!confirm('Stop this GUI application?')) return;
+            
+            try {
+                await fetch(`/api/x11/apps/${appId}`, { method: 'DELETE' });
+                
+                if (currentX11App === appId) {
+                    closeX11Panel();
+                }
+                
+                await refreshX11Apps();
+                
+            } catch (error) {
+                console.error('Failed to stop X11 app:', error);
+            }
+        }
+        
+        function closeX11Panel() {
+            if (rfbConnection) {
+                rfbConnection.disconnect();
+                rfbConnection = null;
+            }
+            currentX11App = null;
+            document.getElementById('x11Panel').style.display = 'none';
+            document.getElementById('x11Container').innerHTML = '';
+            renderX11AppList();
+        }
+        
+        // Handle Enter in X11 modal
+        document.getElementById('x11Command').addEventListener('keydown', (e) => {
+            if (e.key === 'Enter') launchX11App();
+        });
+        
+        // ========================================================================
+        // Session X11 Display
+        // ========================================================================
+        
+        let sessionDisplayInfo = null;
+        let sessionRfbConnection = null;
+        
+        let x11Available = null; // null = unknown, true/false = checked
+        
+        async function checkX11Available() {
+            try {
+                const response = await fetch('/api/x11/check');
+                const data = await response.json();
+                x11Available = (data.status === 'ok');
+                updateGuiButtonAvailability();
+            } catch (error) {
+                x11Available = false;
+            }
+        }
+        
+        function updateGuiButtonAvailability() {
+            const btn = document.getElementById('guiToggleBtn');
+            if (!btn) return;
+            
+            if (x11Available === false) {
+                btn.title = 'GUI requires: sudo apt install xvfb x11vnc websockify';
+                btn.style.opacity = '0.6';
+            } else {
+                btn.title = 'Enable GUI apps in this session';
+                btn.style.opacity = '1';
+            }
+        }
+        
+        async function checkSessionDisplay() {
+            if (!currentSession) return;
+            
+            try {
+                const response = await fetch(`/api/sessions/${currentSession}/display`);
+                const data = await response.json();
+                
+                if (data.status === 'ok' && data.display) {
+                    sessionDisplayInfo = data.display;
+                    updateGuiButton(true);
+                    showSessionDisplay();
+                } else {
+                    sessionDisplayInfo = null;
+                    updateGuiButton(false);
+                    hideSessionDisplay();
+                }
+            } catch (error) {
+                console.error('Failed to check session display:', error);
+            }
+        }
+        
+        function updateGuiButton(enabled) {
+            const btn = document.getElementById('guiToggleBtn');
+            if (enabled) {
+                btn.textContent = '🖼️ GUI Enabled';
+                btn.classList.remove('btn-primary');
+                btn.classList.add('btn-success');
+                btn.style.background = '#238636';
+            } else {
+                btn.textContent = '🖼️ Enable GUI';
+                btn.classList.remove('btn-success');
+                btn.classList.add('btn-primary');
+                btn.style.background = '';
+            }
+        }
+        
+        async function toggleSessionDisplay() {
+            if (!currentSession) return;
+            
+            if (sessionDisplayInfo) {
+                // Disable
+                await disableSessionDisplay();
+            } else {
+                // Enable
+                await enableSessionDisplay();
+            }
+        }
+        
+        async function enableSessionDisplay() {
+            if (!currentSession) return;
+            
+            // Get selected size from dropdown
+            const sizeSelect = document.getElementById('displaySizeSelect');
+            const [width, height] = (sizeSelect ? sizeSelect.value : '1280x800').split('x').map(Number);
+            
+            try {
+                const response = await fetch(`/api/sessions/${currentSession}/display`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ width, height })
+                });
+                
+                const data = await response.json();
+                
+                if (data.status === 'error') {
+                    // Check if it's a missing dependencies error
+                    if (data.message && data.message.includes('Missing dependencies')) {
+                        const installCmd = 'sudo apt install xvfb x11vnc websockify';
+                        if (confirm(`GUI requires X11 packages to be installed.\n\n${data.message}\n\nInstall command:\n${installCmd}\n\nCopy install command to clipboard?`)) {
+                            navigator.clipboard.writeText(installCmd).then(() => {
+                                alert('Command copied! Run it in your server terminal, then try again.');
+                            }).catch(() => {
+                                alert(`Please run this command on your server:\n\n${installCmd}`);
+                            });
+                        }
+                    } else {
+                        alert('Failed to enable GUI: ' + data.message);
+                    }
+                    return;
+                }
+                
+                sessionDisplayInfo = data.display;
+                updateGuiButton(true);
+                showSessionDisplay();
+                
+            } catch (error) {
+                console.error('Failed to enable session display:', error);
+                alert('Failed to enable GUI display');
+            }
+        }
+        
+        async function resizeSessionDisplay() {
+            if (!currentSession || !sessionDisplayInfo) return;
+            
+            // Need to restart display with new size
+            await disableSessionDisplay();
+            await enableSessionDisplay();
+        }
+        
+        async function disableSessionDisplay() {
+            if (!currentSession) return;
+            
+            try {
+                await fetch(`/api/sessions/${currentSession}/display`, { method: 'DELETE' });
+                
+                sessionDisplayInfo = null;
+                updateGuiButton(false);
+                hideSessionDisplay();
+                
+            } catch (error) {
+                console.error('Failed to disable session display:', error);
+            }
+        }
+        
+        async function showSessionDisplay() {
+            if (!sessionDisplayInfo) return;
+            
+            const panel = document.getElementById('sessionX11Panel');
+            const container = document.getElementById('sessionX11Container');
+            const info = document.getElementById('sessionDisplayInfo');
+            const sizeSelect = document.getElementById('displaySizeSelect');
+            
+            panel.style.display = 'block';
+            info.textContent = `(${sessionDisplayInfo.display} - ${sessionDisplayInfo.width}x${sessionDisplayInfo.height})`;
+            
+            // Update dropdown to reflect current size
+            if (sizeSelect) {
+                const currentSize = `${sessionDisplayInfo.width}x${sessionDisplayInfo.height}`;
+                for (let option of sizeSelect.options) {
+                    if (option.value === currentSize) {
+                        sizeSelect.value = currentSize;
+                        break;
+                    }
+                }
+            }
+            
+            // Update the display number in tips
+            const displaySpan = document.getElementById('currentDisplay');
+            if (displaySpan) {
+                displaySpan.textContent = sessionDisplayInfo.display;
+            }
+            
+            container.style.width = sessionDisplayInfo.width + 'px';
+            container.style.height = sessionDisplayInfo.height + 'px';
+            container.innerHTML = '<p style="color: #8b949e; padding: 40px; text-align: center;">Connecting to display...</p>';
+            
+            // Disconnect existing connection
+            if (sessionRfbConnection) {
+                sessionRfbConnection.disconnect();
+                sessionRfbConnection = null;
+            }
+            
+            // Connect via noVNC
+            try {
+                const RFB = (await import('https://cdn.jsdelivr.net/npm/@novnc/novnc@1.4.0/core/rfb.js')).default;
+                
+                const wsUrl = `ws://${window.location.hostname}:${sessionDisplayInfo.ws_port}`;
+                
+                container.innerHTML = '';
+                
+                sessionRfbConnection = new RFB(container, wsUrl, {
+                    scaleViewport: false,
+                    resizeSession: false
+                });
+                
+                sessionRfbConnection.addEventListener('connect', () => {
+                    console.log('Connected to session VNC');
+                });
+                
+                sessionRfbConnection.addEventListener('disconnect', (e) => {
+                    console.log('Disconnected from session VNC:', e.detail);
+                });
+                
+            } catch (error) {
+                console.error('Failed to connect to session display:', error);
+                container.innerHTML = `<p style="color: #f85149; padding: 20px;">Failed to connect: ${error.message}</p>`;
+            }
+        }
+        
+        function hideSessionDisplay() {
+            if (sessionRfbConnection) {
+                sessionRfbConnection.disconnect();
+                sessionRfbConnection = null;
+            }
+            document.getElementById('sessionX11Panel').style.display = 'none';
+            document.getElementById('sessionX11Container').innerHTML = '';
+        }
+        
+        function refreshSessionDisplay() {
+            if (sessionDisplayInfo) {
+                showSessionDisplay();
+            }
+        }
+        
+        // ========================================================================
+        // Initialization
+        // ========================================================================
+        
+        document.addEventListener('DOMContentLoaded', () => {
+            initTerminal();
+            connectWebSocket();
+            refreshX11Apps();
+            checkX11Available();
+        });
+    </script>
 </body>
 </html>

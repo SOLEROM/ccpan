@@ -1,6 +1,0 @@
-#editor
-echo "aaaa"
-exec bash
-#app2
-echo "app2 window"
-ls 

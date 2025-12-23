@@ -1,372 +1,497 @@
-# Tmux Control Panel v4 - Architecture
+# Tmux Control Panel v2 - Architecture Documentation
 
-This document describes the architecture and design concepts of the Tmux Control Panel, providing a high-level overview for maintenance and future development.
+This document explains the internal architecture and design decisions for maintainability.
 
-## Overview
+## Table of Contents
 
-The application follows a **modular client-server architecture** with:
-- **Backend**: Python Flask server with WebSocket support
-- **Frontend**: Vanilla JavaScript single-page application
-- **External Dependencies**: tmux, Xvfb, x11vnc, websockify
+1. [System Overview](#system-overview)
+2. [Architecture Diagram](#architecture-diagram)
+3. [Component Details](#component-details)
+4. [Data Flow](#data-flow)
+5. [Key Design Decisions](#key-design-decisions)
+6. [Code Structure](#code-structure)
+7. [Extending the System](#extending-the-system)
+
+---
+
+## System Overview
+
+The Tmux Control Panel provides web-based access to tmux sessions. The key architectural goal is that **web UI and CLI share the exact same tmux session** - what you see in the browser is the same as `tmux attach`.
+
+### Core Components
+
+1. **Flask Server** - HTTP server for REST API and static files
+2. **Socket.IO** - WebSocket server for real-time bidirectional communication
+3. **PTY Layer** - Pseudo-terminal that attaches to tmux
+4. **tmux** - Session manager and scrollback buffer
+5. **xterm.js** - Browser-based terminal emulator
+
+---
+
+## Architecture Diagram
 
 ```
-┌─────────────────────────────────────────────────────────────────┐
-│                         Browser (Client)                        │
-├─────────────────────────────────────────────────────────────────┤
-│  ┌─────────────┐  ┌─────────────┐  ┌─────────────────────────┐ │
-│  │   xterm.js  │  │  Socket.IO  │  │        noVNC            │ │
-│  │  (Terminal) │  │ (WebSocket) │  │   (VNC over WebSocket)  │ │
-│  └──────┬──────┘  └──────┬──────┘  └───────────┬─────────────┘ │
-└─────────┼────────────────┼─────────────────────┼───────────────┘
-          │                │                     │
-          │    HTTP/WS     │                     │ WS (VNC)
-          │    :5000       │                     │ :6100+
-          ▼                ▼                     ▼
-┌─────────────────────────────────────────────────────────────────┐
-│                      Flask Server (Backend)                     │
-├─────────────────────────────────────────────────────────────────┤
-│  ┌──────────────┐  ┌──────────────┐  ┌──────────────────────┐  │
-│  │    Routes    │  │   WebSocket  │  │    X11 Manager       │  │
-│  │  (REST API)  │  │   Handlers   │  │  (Xvfb/VNC/WS)       │  │
-│  └──────┬───────┘  └──────┬───────┘  └──────────┬───────────┘  │
-│         │                 │                     │              │
-│  ┌──────┴───────┐  ┌──────┴───────┐  ┌─────────┴────────────┐  │
-│  │    Config    │  │ PTY Manager  │  │    Tmux Manager      │  │
-│  │   Manager    │  │              │  │                      │  │
-│  └──────────────┘  └──────┬───────┘  └──────────┬───────────┘  │
-└────────────────────────────┼────────────────────┼──────────────┘
-                             │                    │
-                             ▼                    ▼
-                    ┌────────────────┐   ┌────────────────┐
-                    │   PTY/Shell    │   │     tmux       │
-                    │   Processes    │   │    Server      │
-                    └────────────────┘   └────────────────┘
+┌─────────────────────────────────────────────────────────────────────────┐
+│                              BROWSER                                     │
+│  ┌────────────────────────────────────────────────────────────────────┐ │
+│  │                         xterm.js Terminal                           │ │
+│  │  • Renders terminal output (ANSI colors, cursor positioning)       │ │
+│  │  • Captures keyboard input                                          │ │
+│  │  • Handles mouse wheel events → triggers scroll commands            │ │
+│  └──────────────────────────────┬─────────────────────────────────────┘ │
+│                                 │                                        │
+│                    Socket.IO WebSocket Connection                        │
+│                                 │                                        │
+│         ┌───────────────────────┼───────────────────────┐               │
+│         │                       │                       │               │
+│         ▼                       ▼                       ▼               │
+│    ┌─────────┐            ┌─────────┐            ┌─────────┐           │
+│    │  input  │            │  output │            │  scroll │           │
+│    │ (keys)  │            │ (data)  │            │(command)│           │
+│    └─────────┘            └─────────┘            └─────────┘           │
+└─────────┼───────────────────────┼───────────────────────┼───────────────┘
+          │                       ▲                       │
+          │                       │                       │
+┌─────────┼───────────────────────┼───────────────────────┼───────────────┐
+│         │           PYTHON SERVER (server_pty.py)       │               │
+│         │                       │                       │               │
+│         ▼                       │                       ▼               │
+│  ┌─────────────┐         ┌─────────────┐        ┌─────────────┐        │
+│  │  WebSocket  │         │   Reader    │        │   Scroll    │        │
+│  │   Handler   │         │   Thread    │        │   Handler   │        │
+│  │             │         │             │        │             │        │
+│  │ • subscribe │         │ • os.read() │        │ • copy-mode │        │
+│  │ • input     │         │ • emit()    │        │ • C-y / C-e │        │
+│  │ • resize    │         │             │        │             │        │
+│  └──────┬──────┘         └──────┬──────┘        └──────┬──────┘        │
+│         │                       │                       │               │
+│         │              ┌────────┴────────┐              │               │
+│         │              │  PTY Connection │              │               │
+│         │              │   Dictionary    │              │               │
+│         │              │                 │              │               │
+│         │              │ {session_name:  │              │               │
+│         │              │   master_fd,    │              │               │
+│         │              │   pid,          │              │               │
+│         │              │   thread,       │              │               │
+│         │              │   clients}      │              │               │
+│         │              └────────┬────────┘              │               │
+│         │                       │                       │               │
+│         ▼                       ▼                       ▼               │
+│  ┌──────────────────────────────────────────────────────────────────┐  │
+│  │                      PTY (Master/Slave Pair)                      │  │
+│  │                                                                   │  │
+│  │   os.write(master_fd, keys)  ◄────────────────┐                  │  │
+│  │                                                │                  │  │
+│  │   os.read(master_fd) ─────────────────────────┼──► emit output   │  │
+│  │                                                │                  │  │
+│  └──────────────────────────────┬────────────────┘──────────────────┘  │
+│                                 │                       │               │
+│                                 │                       │               │
+│                     ┌───────────┴───────────┐           │               │
+│                     │    tmux attach -t     │           │               │
+│                     │      <session>        │           │               │
+│                     └───────────┬───────────┘           │               │
+│                                 │                       │               │
+└─────────────────────────────────┼───────────────────────┼───────────────┘
+                                  │                       │
+                                  │    tmux commands      │
+                                  │    (copy-mode,        │
+                                  │     send-keys,        │
+                                  │     resize-window)    │
+                                  │                       │
+┌─────────────────────────────────┼───────────────────────┼───────────────┐
+│                                 ▼                       ▼               │
+│                        TMUX SERVER (socket: control-panel)              │
+│                                                                         │
+│   ┌─────────────┐    ┌─────────────┐    ┌─────────────┐                │
+│   │ cp-session1 │    │ cp-session2 │    │ cp-session3 │                │
+│   │             │    │             │    │             │                │
+│   │  • shell    │    │  • shell    │    │  • shell    │                │
+│   │  • history  │    │  • history  │    │  • history  │                │
+│   │  (50,000    │    │  (50,000    │    │  (50,000    │                │
+│   │   lines)    │    │   lines)    │    │   lines)    │                │
+│   └─────────────┘    └─────────────┘    └─────────────┘                │
+│                                                                         │
+│                              ▲                                          │
+│                              │                                          │
+│                     CLI: tmux -L control-panel attach -t cp-session1    │
+│                                                                         │
+└─────────────────────────────────────────────────────────────────────────┘
 ```
 
-## Backend Modules
+---
 
-### `server.py` - Application Entry Point
+## Component Details
 
-**Responsibilities:**
-- Initialize Flask application with CORS and Socket.IO
-- Register routes and WebSocket handlers
-- Manage application lifecycle (startup/shutdown)
-- Cleanup resources on exit (PTY connections, X11 displays)
+### 1. Flask + Socket.IO Server (`server_pty.py`)
 
-**Key Design Decisions:**
-- Uses eventlet for async WebSocket support (falls back to threading)
-- Managers are initialized once and passed to routes/handlers
-- Cleanup registered via `atexit` for graceful shutdown
+The server handles three types of communication:
 
-### `modules/config.py` - Configuration Management
+#### REST API (HTTP)
+- Session CRUD operations
+- Quick commands management
+- Serves the web UI
 
-**Responsibilities:**
-- Load/save persistent configuration from `config.json`
-- Provide typed access to configuration values
-- Define sensible defaults
+#### WebSocket Events (Socket.IO)
+- `subscribe` - Client wants to connect to a session
+- `unsubscribe` - Client disconnecting from session
+- `input` - Keyboard input from client
+- `resize` - Terminal size changed
+- `signal` - Send SIGINT, SIGTERM, etc.
+- `scroll` - Enter/exit copy-mode, scroll up/down
 
-**Configuration Values:**
+#### PTY Management
+- Spawns PTY pairs using `pty.fork()`
+- Child process runs `tmux attach -t <session>`
+- Parent process reads/writes to master_fd
+
+### 2. PTY Connections Dictionary
+
 ```python
-DEFAULT_CONFIG = {
-    'tmux_socket': 'control-panel',  # tmux -L <socket>
-    'session_prefix': 'cp-',          # prefix for session names
-    'default_shell': '/bin/bash',
-    'scrollback_limit': 50000
-}
-```
-
-**Design Pattern:** Singleton-like config object passed to all managers.
-
-### `modules/tmux_manager.py` - Tmux Operations
-
-**Responsibilities:**
-- Create/destroy tmux sessions
-- Resize windows for terminal dimensions
-- Send keys and signals to sessions
-- Manage scrollback (copy-mode enter/exit, scroll up/down)
-- Get scrollback content
-
-**Key Methods:**
-```python
-create_session(name, cwd, command, socket)  # Create new session
-destroy_session(name, socket)                # Kill session
-resize_window(name, cols, rows, socket)      # Resize terminal
-send_keys(name, keys, socket)                # Send input
-scroll(name, command, lines, socket)         # Scroll operations
-get_scrollback(name, lines, socket)          # Get history
-```
-
-**Design Pattern:** All tmux commands go through `_run()` method which handles socket selection and subprocess execution.
-
-### `modules/pty_manager.py` - PTY Connection Management
-
-**Responsibilities:**
-- Spawn PTY processes attached to tmux sessions
-- Manage reader threads for output streaming
-- Track connected clients per session
-- Handle connection/disconnection lifecycle
-
-**Architecture:**
-```
-Client connects → get_or_create() → spawn_pty() → _start_reader()
-                                         │
-                                         ▼
-                              tmux attach-session -t <session>
-                                         │
-                                         ▼
-                              Reader thread → output callback
-```
-
-**Key Design Decisions:**
-- One PTY per session (shared across multiple clients viewing same session)
-- Reader thread continuously reads PTY output and calls callback
-- Reference counting for cleanup (only close PTY when last client disconnects)
-
-### `modules/x11_manager.py` - X11 Display Management
-
-**Responsibilities:**
-- Start virtual X11 displays (Xvfb)
-- Start VNC server for each display (x11vnc)
-- Start WebSocket proxy for browser access (websockify)
-- Track display processes and ports
-- Clean up processes on display stop
-
-**Process Chain:**
-```
-Xvfb :100 -screen 0 1280x800x24
-         │
-         ▼
-x11vnc -display :100 -rfbport 5900 -shared -forever
-         │
-         ▼
-websockify 6100 localhost:5900
-         │
-         ▼
-Browser connects via noVNC to ws://host:6100
-```
-
-**Port Allocation:**
-- Display numbers: 100, 101, 102, ... (configurable base)
-- VNC ports: 5900 + display_num (internal)
-- WebSocket ports: 6100+ (external, browser-accessible)
-
-**Design Pattern:** Process management with PID tracking for cleanup.
-
-### `modules/commands_manager.py` - Quick Commands
-
-**Responsibilities:**
-- Store per-session quick commands
-- Persist to config file
-- CRUD operations for commands
-
-**Data Structure:**
-```python
-{
-    "session-name": [
-        {"label": "Build", "command": "npm run build"},
-        {"label": "Test", "command": "npm test"}
-    ]
-}
-```
-
-### `modules/routes.py` - REST API
-
-**Responsibilities:**
-- Define all HTTP endpoints
-- Request validation and error handling
-- Coordinate between managers
-
-**Endpoint Groups:**
-- `/api/sessions/*` - Session CRUD and operations
-- `/api/x11/displays/*` - Display management
-- `/api/config` - Configuration
-- `/api/commands/*` - Quick commands
-
-**Design Pattern:** Flask Blueprint-style organization within single file.
-
-### `modules/websocket_handlers.py` - Real-time Communication
-
-**Responsibilities:**
-- Handle terminal I/O over WebSocket
-- Manage session subscriptions
-- Forward terminal input/output between client and PTY
-
-**Events:**
-```
-Client → Server:
-  - subscribe(session)    # Start receiving output
-  - unsubscribe(session)  # Stop receiving output
-  - input(session, keys)  # Send keystrokes
-  - resize(session, cols, rows)  # Terminal resize
-  - signal(session, sig)  # Send signal (SIGINT, etc)
-  - scroll(session, cmd)  # Scroll operations
-
-Server → Client:
-  - subscribed(session)   # Confirmation
-  - output(session, data) # Terminal output
-  - error(message)        # Error notification
-```
-
-## Frontend Architecture
-
-### State Management
-
-Single global `state` object holds all application state:
-
-```javascript
-const state = {
-    socket: null,        // Socket.IO connection
-    terminal: null,      // xterm.js Terminal instance
-    fitAddon: null,      // Terminal fit addon
-    
-    config: {            // Server configuration
-        tmuxSocket: 'control-panel',
-        sessionPrefix: 'cp-'
-    },
-    
-    sessions: [],        // List of session names
-    currentSession: null,
-    customCommands: {},  // Per-session quick commands
-    
-    displays: [],        // X11 display info
-    
-    layout: 'terminals-only',  // Current layout mode
-    
-    guiPanels: [         // GUI panel states
-        { displayNum, rfb, visible, detached, fullscreen },
-        // ...
-    ],
-    
-    panelSizes: {        // Resizable panel dimensions
-        guiContainer: 50,
-        terminal: 50,
-        guiRows: [33.33, 33.33, 33.33]
+pty_connections = {
+    "cp-session1": {
+        "master_fd": 5,              # File descriptor for PTY master
+        "pid": 12345,                # PID of tmux attach process
+        "reader_thread": <Thread>,   # Thread reading PTY output
+        "stop_event": <Event>,       # Signal to stop reader thread
+        "clients": {"sid1", "sid2"}  # Connected WebSocket client IDs
     }
-};
-```
-
-### DOM Caching
-
-DOM elements cached in `dom` object at startup for performance:
-
-```javascript
-const dom = {};
-function cacheDomElements() {
-    dom.statusDot = document.getElementById('statusDot');
-    dom.terminalPanel = document.getElementById('terminalPanel');
-    // ...
 }
 ```
 
-### Component Organization
+### 3. Reader Thread
 
-Frontend organized by feature:
+Each session has a dedicated thread that:
+1. Uses `select()` to wait for data on master_fd (50ms timeout)
+2. Reads up to 16KB of data
+3. Emits to all clients in the session's Socket.IO room
+4. Handles cleanup when PTY closes
 
-1. **Configuration** - Load/save server config
-2. **WebSocket** - Connection management, event handlers
-3. **Terminal** - xterm.js setup, input/output handling
-4. **Sessions** - CRUD operations, list rendering
-5. **Quick Commands** - Command management UI
-6. **X11 Displays** - Display creation, listing
-7. **Layout** - Panel visibility, arrangement
-8. **Resizing** - Drag-to-resize functionality
-9. **GUI Panels** - VNC connection, fullscreen, detach
+```python
+def reader_thread():
+    while not stop_event.is_set():
+        readable, _, _ = select.select([master_fd], [], [], 0.05)
+        if readable:
+            data = os.read(master_fd, 16384)
+            socketio.emit('output', {'session': name, 'data': data}, room=name)
+```
 
-### External Libraries
+### 4. tmux Integration
 
-| Library | Purpose | CDN |
-|---------|---------|-----|
-| xterm.js | Terminal emulator | unpkg |
-| xterm-addon-fit | Auto-resize terminal | unpkg |
-| xterm-addon-web-links | Clickable URLs | unpkg |
-| Socket.IO | WebSocket client | cdnjs |
-| noVNC | VNC over WebSocket | jsdelivr |
+tmux is used for:
+- **Session persistence** - Sessions survive server restart
+- **Scrollback buffer** - 50,000 lines of history per session
+- **Copy-mode** - Native scroll support with keyboard navigation
+- **CLI access** - Attach from terminal with `tmux attach`
+
+Key tmux commands used:
+```bash
+tmux -L control-panel new-session -d -s cp-name    # Create session
+tmux -L control-panel kill-session -t cp-name      # Delete session
+tmux -L control-panel resize-window -t name -x -y  # Resize
+tmux -L control-panel copy-mode -t name            # Enter scroll mode
+tmux -L control-panel send-keys -t name -N 5 C-y   # Scroll up 5 lines
+tmux -L control-panel send-keys -t name q          # Exit copy-mode
+```
+
+### 5. xterm.js Frontend
+
+The frontend uses xterm.js with these addons:
+- **FitAddon** - Auto-resize terminal to container
+- **WebLinksAddon** - Clickable URLs
+
+Key handlers:
+- `term.onData()` - Captures keyboard input → sends to server
+- `term.onResize()` - Detects size changes → sends resize event
+- `term.write()` - Renders output from server
+- `wheel` event - Triggers scroll commands
+
+---
 
 ## Data Flow
 
-### Terminal Input Flow
+### Typing a Command
+
 ```
-User types → xterm.js onData → Socket.IO 'input' event
-    → WebSocket handler → PTY write → tmux session
+1. User types 'l' in browser
+   │
+2. xterm.js onData fires with 'l'
+   │
+3. Socket.IO emit('input', {session, keys: 'l'})
+   │
+4. Server handle_input() receives event
+   │
+5. os.write(master_fd, b'l')
+   │
+6. PTY sends 'l' to tmux attach process
+   │
+7. tmux sends 'l' to shell, shell echoes 'l'
+   │
+8. tmux sends echo back through PTY
+   │
+9. Reader thread: os.read(master_fd) → 'l'
+   │
+10. socketio.emit('output', {data: 'l'}, room=session)
+    │
+11. Browser receives 'output' event
+    │
+12. term.write('l') → character appears on screen
 ```
 
-### Terminal Output Flow
+### Scrolling Up
+
 ```
-tmux output → PTY read → reader thread callback
-    → Socket.IO 'output' emit → xterm.js write
+1. User scrolls mouse wheel up
+   │
+2. wheel event handler detects deltaY < 0
+   │
+3. If not in copy-mode:
+   │   emit('scroll', {command: 'enter'})
+   │   Server: tmux copy-mode -t session
+   │   (tmux enters copy-mode, shows indicator)
+   │
+4. emit('scroll', {command: 'up', lines: 3})
+   │
+5. Server: tmux send-keys -t session -N 3 C-y
+   │
+6. tmux scrolls up 3 lines in copy-mode
+   │
+7. tmux redraws screen through PTY
+   │
+8. Reader thread emits new screen content
+   │
+9. xterm.js renders scrolled view
 ```
 
-### GUI Display Flow
+### Exiting Copy-Mode
+
 ```
-Create display → Xvfb starts → x11vnc connects → websockify proxies
-    → noVNC connects from browser → GUI visible in panel
+1. User types any key while in copy-mode
+   │
+2. onData handler checks inCopyMode flag
+   │
+3. emit('scroll', {command: 'exit'})
+   │
+4. Server: tmux send-keys -t session q
+   │
+5. tmux exits copy-mode, returns to live shell
+   │
+6. inCopyMode = false
+   │
+7. Normal key is sent to shell
 ```
 
-## Design Principles
+---
 
-### 1. Separation of Concerns
-Each module has a single responsibility. Managers don't know about HTTP or WebSocket - they just manage their domain.
+## Key Design Decisions
 
-### 2. Stateless Routes
-Routes are stateless - all state lives in managers. This makes testing and debugging easier.
+### Why PTY + tmux attach?
 
-### 3. Graceful Degradation
-- Works without X11 packages (terminal-only mode)
-- Falls back to threading if eventlet unavailable
-- GUI panels handle VNC disconnection gracefully
+**Problem:** How to share a session between web UI and CLI?
 
-### 4. Resource Cleanup
-- PTY processes cleaned up on disconnect
-- X11 processes killed on display stop
-- Cleanup on server shutdown via atexit
+**Options considered:**
+1. Direct shell in PTY (no tmux) - No CLI access, no persistent scrollback
+2. tmux pipe-pane - Unreliable, misses output
+3. tmux capture-pane - Width mismatch causes display corruption
+4. **PTY running tmux attach** ✓ - Both see same session
 
-### 5. Client-Side State Persistence
-- GUI connections survive layout changes
-- Panel sizes remembered during session
-- Detached panel positions maintained
+**Solution:** The PTY child process runs `tmux attach`, so all I/O goes through tmux. The web UI and any CLI attachment see identical content.
 
-## Maintenance Guide
+### Why tmux copy-mode for scrolling?
 
-### Adding a New Tmux Feature
+**Problem:** How to scroll through history in the web UI?
 
-1. Add method to `TmuxManager` class
-2. Add route in `routes.py` if HTTP access needed
-3. Add WebSocket event in `websocket_handlers.py` if real-time
-4. Add frontend function and UI
+**Options considered:**
+1. xterm.js scrollback buffer - Doesn't work because tmux uses alternate screen
+2. Fetch scrollback with capture-pane - Width mismatch causes corruption
+3. **tmux copy-mode** ✓ - Native scrolling, correct width, no corruption
 
-### Adding a New Display Feature
+**Solution:** Mouse wheel triggers tmux copy-mode commands. tmux handles the scroll rendering, ensuring correct line wrapping.
 
-1. Modify `X11Manager` class
-2. Update display info structure if needed
-3. Add route for HTTP control
-4. Update frontend display list rendering
+### Why eventlet?
 
-### Modifying Layouts
+**Problem:** Flask-SocketIO needs async support for WebSockets.
 
-1. Update CSS in `main.css` for new layout styles
-2. Modify `setLayout()` function in `app.js`
-3. Add layout button in `index.html`
-4. Update resizer logic if panel arrangement changes
+**Options:**
+1. threading mode - Simpler but can have issues with WebSocket upgrade
+2. **eventlet** ✓ - Monkey-patches for async, reliable WebSocket support
+3. gevent - Similar to eventlet, either works
 
-### Debugging Tips
+### Why resize before subscribe?
 
-1. **Server logs**: Check terminal running `server.py`
-2. **Browser console**: WebSocket errors, JS errors
-3. **Network tab**: API call failures
-4. **tmux directly**: `tmux -L control-panel ls` to verify sessions
-5. **X11 processes**: `ps aux | grep -E 'Xvfb|x11vnc|websockify'`
+**Problem:** Display corruption when terminal sizes don't match.
 
-## Future Improvements
+**Solution:** 
+1. Client sends cols/rows in subscribe event
+2. Server resizes tmux BEFORE spawning PTY
+3. PTY attaches to correctly-sized tmux
+4. Client sends resize again after subscribe to ensure sync
 
-Potential enhancements for future development:
+---
 
-- [ ] Session grouping/tagging
-- [ ] Multiple terminal panels (split terminal view)
-- [ ] Session templates (predefined configurations)
-- [ ] Keyboard shortcuts for common actions
-- [ ] Display resolution presets
-- [ ] Session sharing (multiple users)
-- [ ] Recording/playback of sessions
-- [ ] Plugin system for extensions
-- [ ] Dark/light theme toggle
-- [ ] Mobile-responsive layout
+## Code Structure
+
+### server_pty.py
+
+```
+Imports and Configuration (lines 1-50)
+├── eventlet monkey-patching
+├── Flask/SocketIO setup
+└── Constants (TMUX_SOCKET, SESSION_PREFIX)
+
+tmux Helper Functions (lines 50-120)
+├── run_tmux() - Execute tmux commands
+├── get_tmux_sessions() - List sessions
+├── session_exists() - Check if session exists
+├── create_tmux_session() - Create new session
+└── destroy_tmux_session() - Delete session
+
+PTY Functions (lines 120-200)
+├── set_winsize() - Set terminal size via ioctl
+├── spawn_pty_for_session() - Fork PTY, attach to tmux
+├── get_tmux_scrollback() - Capture pane content
+└── get_tmux_history_size() - Get history line count
+
+PTY Connection Management (lines 200-320)
+├── start_pty_reader() - Start reader thread
+├── cleanup_pty_connection() - Stop thread, close FD
+├── get_or_create_pty_connection() - Get/create connection
+├── remove_client_from_connection() - Remove client
+├── send_keys_to_session() - Write to PTY
+├── resize_session() - Resize PTY and tmux
+└── send_signal_to_session() - Send signal to process
+
+WebSocket Handlers (lines 380-520)
+├── handle_connect() - New WebSocket connection
+├── handle_disconnect() - WebSocket disconnected
+├── handle_subscribe() - Client subscribing to session
+├── handle_unsubscribe() - Client unsubscribing
+├── handle_input() - Keyboard input
+├── handle_resize() - Terminal resize
+├── handle_signal() - Signal control
+└── handle_scroll() - Scroll commands (copy-mode)
+
+REST API (lines 520-600)
+├── index() - Serve web UI
+├── list_sessions() - GET /api/sessions
+├── create_session() - POST /api/sessions
+├── delete_session() - DELETE /api/sessions/<n>
+└── commands endpoints - Quick commands CRUD
+
+Main (lines 600+)
+├── cleanup() - Cleanup on exit
+└── socketio.run() - Start server
+```
+
+### templates/index.html
+
+```
+HTML Structure (lines 1-480)
+├── Head - CSS, external scripts (xterm.js, Socket.IO)
+├── Sidebar - Session list, new session button
+├── Main panel - Terminal container, controls
+└── Modals - New session, add command dialogs
+
+JavaScript (lines 480-1060)
+├── Global State - socket, term, currentSession, etc.
+├── WebSocket Functions
+│   ├── connectWebSocket() - Setup Socket.IO
+│   └── Event handlers (connect, output, subscribed, etc.)
+├── Terminal Functions
+│   ├── initTerminal() - Create xterm.js instance
+│   └── attachTerminal() - Open terminal, setup scroll
+├── Session Management
+│   ├── refreshSessions() - Fetch session list
+│   ├── selectSession() - Switch to session
+│   ├── createSession() - Create new session
+│   └── deleteSession() - Delete session
+├── Quick Commands - Add, render, execute, delete
+├── UI Functions - Modals, status updates
+└── Initialization - DOMContentLoaded setup
+```
+
+---
+
+## Extending the System
+
+### Adding a New WebSocket Event
+
+1. **Server side** (`server_pty.py`):
+```python
+@socketio.on('my_event')
+def handle_my_event(data):
+    session = data.get('session')
+    # ... handle event ...
+    emit('my_response', {'result': 'ok'})
+```
+
+2. **Client side** (`index.html`):
+```javascript
+// Send event
+socket.emit('my_event', { session: currentSession, param: value });
+
+// Handle response
+socket.on('my_response', (data) => {
+    console.log(data.result);
+});
+```
+
+### Adding a New REST Endpoint
+
+```python
+@app.route('/api/my_endpoint', methods=['POST'])
+def my_endpoint():
+    data = request.get_json() or {}
+    # ... process ...
+    return jsonify({'status': 'ok', 'result': result})
+```
+
+### Adding a tmux Feature
+
+1. Find the tmux command: `man tmux`
+2. Test it manually: `tmux -L control-panel <command>`
+3. Add to server:
+```python
+def my_tmux_feature(session_name):
+    full_name = f"{SESSION_PREFIX}{session_name}"
+    result = run_tmux("my-command", "-t", full_name, "args")
+    return result.returncode == 0
+```
+
+### Modifying the UI
+
+The UI is a single HTML file with inline CSS and JavaScript. Key areas:
+
+- **Styles**: `<style>` tag in `<head>` (lines 17-470)
+- **HTML structure**: `<body>` content (lines 470-480)
+- **JavaScript**: `<script>` tag at end (lines 480-1060)
+
+To add a new button:
+```html
+<button class="btn" onclick="myFunction()">My Button</button>
+```
+
+```javascript
+function myFunction() {
+    socket.emit('my_event', { session: currentSession });
+}
+```
+
+---
+
+## Maintenance Tips
+
+1. **Debug WebSocket issues**: Check browser console (F12) and server output
+2. **Debug tmux issues**: Run tmux commands manually to test
+3. **Reset everything**: `tmux -L control-panel kill-server` then restart Python
+4. **Check PTY connections**: Add logging to `start_pty_reader()`
+5. **Test scroll**: Run `seq 1 1000` and scroll up
+
+---
+
+## Known Limitations
+
+1. **Single-user design** - No authentication, local use only
+2. **No session restore** - PTY connections lost on server restart (tmux sessions persist)
+3. **Copy-mode indicator** - Shows in tmux but user needs to know to type to exit
+4. **Browser compatibility** - Requires modern browser with WebSocket support
