@@ -38,22 +38,16 @@ def register_websocket_handlers(socketio, app):
         
         full_name = mgrs['tmux'].get_full_name(session_name)
         
-        if not mgrs['tmux'].session_exists(full_name, socket=socket):
-            emit('error', {'message': f'Session {full_name} does not exist'})
-            return
-        
-        # Resize before connecting
-        mgrs['pty'].resize(full_name, cols, rows, socket=socket)
-        
+        # Join room first
         join_room(full_name)
+        
+        # Try to get or create PTY - this will check window existence internally
         conn = mgrs['pty'].get_or_create(full_name, request.sid, cols, rows, socket=socket)
         
         if not conn:
-            emit('error', {'message': f'Failed to connect to session {full_name}'})
+            leave_room(full_name)
+            emit('error', {'message': f'Session {full_name} does not exist'})
             return
-        
-        # Resize again after PTY is connected
-        mgrs['pty'].resize(full_name, cols, rows, socket=socket)
         
         emit('subscribed', {'session': full_name})
     

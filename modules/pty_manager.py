@@ -1,5 +1,5 @@
 """
-PTY (Pseudo-terminal) management for tmux sessions.
+PTY (Pseudo-terminal) management for tmux windows.
 """
 
 import os
@@ -15,47 +15,53 @@ import errno
 
 
 class PtyManager:
-    """Manages PTY connections to tmux sessions."""
+    """Manages PTY connections to tmux windows."""
     
     def __init__(self, tmux_manager, socketio):
         self.tmux_mgr = tmux_manager
         self.socketio = socketio
-        self.connections = {}  # session_name -> connection info
+        self.connections = {}  # window_name -> connection info
     
     def _set_winsize(self, fd, rows, cols):
         """Set terminal window size."""
         winsize = struct.pack("HHHH", rows, cols, 0, 0)
         fcntl.ioctl(fd, termios.TIOCSWINSZ, winsize)
     
-    def _spawn_pty(self, session_name, cols=120, rows=40, socket=None):
-        """Spawn a PTY that attaches to a tmux session."""
-        full_name = self.tmux_mgr.get_full_name(session_name)
+    def _spawn_pty(self, window_name, cols=120, rows=40, socket=None):
+        """Spawn a PTY that attaches to a specific tmux window pane."""
+        full_name = self.tmux_mgr.get_full_name(window_name)
         socket = socket or self.tmux_mgr.config.tmux_socket
+        session = self.tmux_mgr.get_session_name(socket)
+        target = f"{session}:{full_name}"
         
-        # Resize tmux before attaching
+        # Resize window before attaching
         self.tmux_mgr.resize_window(full_name, cols, rows, socket=socket)
-        time.sleep(0.05)
         
         pid, master_fd = pty.fork()
         
         if pid == 0:
-            # Child process
+            # Child process - attach directly to the window
             os.environ['TERM'] = 'xterm-256color'
-            os.execlp('tmux', 'tmux', '-L', socket, 'attach', '-t', full_name)
+            # Use -t target to attach to specific window directly
+            # -d detaches other clients, -r is read-only (we don't want that)
+            os.execlp('tmux', 'tmux', '-L', socket, 'attach-session', '-t', target)
         else:
             # Parent process
             flags = fcntl.fcntl(master_fd, fcntl.F_GETFL)
             fcntl.fcntl(master_fd, fcntl.F_SETFL, flags | os.O_NONBLOCK)
             self._set_winsize(master_fd, rows, cols)
             
-            time.sleep(0.1)
+            # Small delay then resize
+            time.sleep(0.05)
             self.tmux_mgr.resize_window(full_name, cols, rows, socket=socket)
             
             return master_fd, pid
+            
+            return master_fd, pid
     
-    def _start_reader(self, session_name, master_fd):
+    def _start_reader(self, window_name, master_fd):
         """Start a thread that reads from PTY and emits to WebSocket."""
-        full_name = self.tmux_mgr.get_full_name(session_name)
+        full_name = self.tmux_mgr.get_full_name(window_name)
         stop_event = threading.Event()
         
         def reader_thread():
@@ -89,22 +95,36 @@ class PtyManager:
         thread.start()
         return thread, stop_event
     
-    def get_or_create(self, session_name, sid, cols=120, rows=40, socket=None):
+    def get_or_create(self, window_name, sid, cols=120, rows=40, socket=None):
         """Get existing PTY connection or create a new one."""
-        full_name = self.tmux_mgr.get_full_name(session_name)
+        full_name = self.tmux_mgr.get_full_name(window_name)
         
+        # Check if we already have a valid connection
         if full_name in self.connections:
             conn = self.connections[full_name]
-            conn['clients'].add(sid)
-            if conn.get('reader_stopped', False):
-                self.cleanup(full_name)
-            else:
+            if not conn.get('reader_stopped', False):
+                conn['clients'].add(sid)
+                # Resize existing connection
+                try:
+                    self._set_winsize(conn['master_fd'], rows, cols)
+                except:
+                    pass
+                self.tmux_mgr.resize_window(full_name, cols, rows, socket=socket)
                 return conn
+            else:
+                # Connection is dead, clean it up
+                self.cleanup(full_name)
         
-        if not self.tmux_mgr.session_exists(full_name, socket=socket):
+        # Check if window exists before trying to spawn
+        if not self.tmux_mgr.window_exists(full_name, socket=socket):
             return None
         
-        master_fd, pid = self._spawn_pty(full_name, cols, rows, socket=socket)
+        # Spawn new PTY
+        result = self._spawn_pty(full_name, cols, rows, socket=socket)
+        if result is None:
+            return None
+        
+        master_fd, pid = result
         reader_thread, stop_event = self._start_reader(full_name, master_fd)
         
         self.connections[full_name] = {
@@ -118,9 +138,9 @@ class PtyManager:
         }
         return self.connections[full_name]
     
-    def cleanup(self, session_name):
-        """Clean up PTY connection for a session."""
-        full_name = self.tmux_mgr.get_full_name(session_name)
+    def cleanup(self, window_name):
+        """Clean up PTY connection for a window."""
+        full_name = self.tmux_mgr.get_full_name(window_name)
         
         if full_name not in self.connections:
             return
@@ -143,12 +163,12 @@ class PtyManager:
     
     def cleanup_all(self):
         """Clean up all PTY connections."""
-        for session_name in list(self.connections.keys()):
-            self.cleanup(session_name)
+        for window_name in list(self.connections.keys()):
+            self.cleanup(window_name)
     
-    def remove_client(self, session_name, sid):
+    def remove_client(self, window_name, sid):
         """Remove a client from a PTY connection."""
-        full_name = self.tmux_mgr.get_full_name(session_name)
+        full_name = self.tmux_mgr.get_full_name(window_name)
         
         if full_name not in self.connections:
             return
@@ -163,9 +183,9 @@ class PtyManager:
                     self.cleanup(full_name)
             threading.Thread(target=delayed_cleanup, daemon=True).start()
     
-    def send_keys(self, session_name, keys):
+    def send_keys(self, window_name, keys):
         """Send keys to the PTY."""
-        full_name = self.tmux_mgr.get_full_name(session_name)
+        full_name = self.tmux_mgr.get_full_name(window_name)
         
         if full_name in self.connections:
             try:
@@ -176,9 +196,9 @@ class PtyManager:
         
         return self.tmux_mgr.send_keys(full_name, keys)
     
-    def resize(self, session_name, cols, rows, socket=None):
-        """Resize both the PTY and tmux session."""
-        full_name = self.tmux_mgr.get_full_name(session_name)
+    def resize(self, window_name, cols, rows, socket=None):
+        """Resize both the PTY and tmux window."""
+        full_name = self.tmux_mgr.get_full_name(window_name)
         
         if full_name in self.connections:
             try:
