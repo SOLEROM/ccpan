@@ -211,6 +211,13 @@ function initTerminal() {
         fontSize: 14,
         fontFamily: '"JetBrains Mono", "Fira Code", Consolas, monospace',
         scrollback: 50000,
+        allowProposedApi: true,
+        macOptionIsMeta: true,
+        macOptionClickForcesSelection: true,
+        rightClickSelectsWord: true,
+        fastScrollModifier: 'alt',
+        fastScrollSensitivity: 5,
+        scrollSensitivity: 1,
         theme: {
             background: '#080a0d',
             foreground: '#d4dae4',
@@ -240,6 +247,23 @@ function initTerminal() {
     state.terminal.loadAddon(state.fitAddon);
     state.terminal.loadAddon(new WebLinksAddon.WebLinksAddon());
     
+    // Custom key event handler for special keys
+    state.terminal.attachCustomKeyEventHandler((event) => {
+        // Let browser handle Ctrl+Shift+C/V for copy/paste
+        if (event.ctrlKey && event.shiftKey && (event.key === 'C' || event.key === 'V')) {
+            return false;
+        }
+        // Let browser handle Ctrl+C for copy when text is selected
+        if (event.ctrlKey && event.key === 'c' && state.terminal.hasSelection()) {
+            return false;
+        }
+        // Let browser handle Ctrl+V for paste
+        if (event.ctrlKey && event.key === 'v') {
+            return false;
+        }
+        return true;
+    });
+    
     state.terminal.onData((data) => {
         if (state.currentSession && state.socket && state.socket.connected) {
             if (state.inCopyMode) {
@@ -251,6 +275,123 @@ function initTerminal() {
             } else {
                 state.socket.emit('input', { session: state.currentSession, keys: data });
             }
+        }
+    });
+    
+    // Handle special keys that xterm.js might not send correctly
+    state.terminal.onKey(({ key, domEvent }) => {
+        if (!state.currentSession || !state.socket || !state.socket.connected) return;
+        
+        const modifiers = {
+            ctrl: domEvent.ctrlKey,
+            alt: domEvent.altKey,
+            shift: domEvent.shiftKey,
+            meta: domEvent.metaKey
+        };
+        
+        let seq = null;
+        
+        switch (domEvent.key) {
+            case 'Home':
+                if (modifiers.ctrl) {
+                    seq = '\x1b[1;5H'; // Ctrl+Home
+                } else if (modifiers.shift) {
+                    seq = '\x1b[1;2H'; // Shift+Home
+                } else {
+                    seq = '\x1b[H'; // Home
+                }
+                break;
+            case 'End':
+                if (modifiers.ctrl) {
+                    seq = '\x1b[1;5F'; // Ctrl+End
+                } else if (modifiers.shift) {
+                    seq = '\x1b[1;2F'; // Shift+End
+                } else {
+                    seq = '\x1b[F'; // End
+                }
+                break;
+            case 'PageUp':
+                if (modifiers.shift) {
+                    // Shift+PageUp: scroll terminal buffer up
+                    if (!state.inCopyMode) {
+                        state.socket.emit('scroll', { session: state.currentSession, command: 'enter' });
+                        state.inCopyMode = true;
+                    }
+                    state.socket.emit('scroll', { session: state.currentSession, command: 'page-up' });
+                    return;
+                } else {
+                    seq = '\x1b[5~'; // PageUp
+                }
+                break;
+            case 'PageDown':
+                if (modifiers.shift) {
+                    // Shift+PageDown: scroll terminal buffer down
+                    if (state.inCopyMode) {
+                        state.socket.emit('scroll', { session: state.currentSession, command: 'page-down' });
+                    }
+                    return;
+                } else {
+                    seq = '\x1b[6~'; // PageDown
+                }
+                break;
+            case 'Insert':
+                if (modifiers.shift) {
+                    // Shift+Insert: paste (let browser handle)
+                    return;
+                } else {
+                    seq = '\x1b[2~'; // Insert
+                }
+                break;
+            case 'Delete':
+                if (modifiers.ctrl) {
+                    seq = '\x1b[3;5~'; // Ctrl+Delete
+                } else if (modifiers.shift) {
+                    seq = '\x1b[3;2~'; // Shift+Delete
+                } else {
+                    seq = '\x1b[3~'; // Delete
+                }
+                break;
+            case 'F1':
+                seq = '\x1bOP';
+                break;
+            case 'F2':
+                seq = '\x1bOQ';
+                break;
+            case 'F3':
+                seq = '\x1bOR';
+                break;
+            case 'F4':
+                seq = '\x1bOS';
+                break;
+            case 'F5':
+                seq = '\x1b[15~';
+                break;
+            case 'F6':
+                seq = '\x1b[17~';
+                break;
+            case 'F7':
+                seq = '\x1b[18~';
+                break;
+            case 'F8':
+                seq = '\x1b[19~';
+                break;
+            case 'F9':
+                seq = '\x1b[20~';
+                break;
+            case 'F10':
+                seq = '\x1b[21~';
+                break;
+            case 'F11':
+                seq = '\x1b[23~';
+                break;
+            case 'F12':
+                seq = '\x1b[24~';
+                break;
+        }
+        
+        if (seq) {
+            domEvent.preventDefault();
+            state.socket.emit('input', { session: state.currentSession, keys: seq });
         }
     });
     
@@ -266,6 +407,7 @@ function attachTerminal() {
     state.terminal.open(dom.terminalContainer);
     state.terminal.clear();
     
+    // Mouse wheel scrolling through tmux history
     dom.terminalContainer.addEventListener('wheel', (e) => {
         e.preventDefault();
         if (!state.currentSession || !state.socket || !state.socket.connected) return;
@@ -285,6 +427,11 @@ function attachTerminal() {
             state.socket.emit('scroll', { session: state.currentSession, command: 'down', lines });
         }
     }, { passive: false, capture: true });
+    
+    // Focus terminal on click
+    dom.terminalContainer.addEventListener('click', () => {
+        state.terminal.focus();
+    });
     
     setTimeout(() => {
         state.fitAddon.fit();
@@ -333,6 +480,7 @@ async function selectSession(session) {
     }
     
     state.currentSession = session;
+    state.inCopyMode = false; // Reset copy mode when switching sessions
     dom.terminalPlaceholder.style.display = 'none';
     dom.terminalContainer.style.display = 'block';
     dom.terminalTitle.textContent = session;
@@ -370,6 +518,9 @@ async function createSession() {
         
         if (data.status === 'ok') {
             hideModal('newSessionModal');
+            document.getElementById('sessionName').value = '';
+            document.getElementById('sessionCwd').value = '';
+            document.getElementById('sessionCmd').value = '';
             await refreshSessions();
             selectSession(data.session);
         } else {
@@ -389,6 +540,7 @@ async function deleteSession(session) {
             state.currentSession = null;
             dom.terminalPlaceholder.style.display = 'flex';
             dom.terminalContainer.style.display = 'none';
+            dom.terminalTitle.textContent = 'No session selected';
         }
         await refreshSessions();
     } catch (error) {
@@ -408,7 +560,8 @@ function sendSignal(sig) {
 
 function clearTerminal() {
     if (state.currentSession && state.socket && state.socket.connected) {
-        state.socket.emit('input', { session: state.currentSession, keys: 'clear\r' });
+        // Send Ctrl+L for clear (works better than 'clear' command)
+        state.socket.emit('input', { session: state.currentSession, keys: '\x0c' });
     }
 }
 
@@ -457,6 +610,8 @@ async function addCommand() {
             state.customCommands[state.currentSession] = data.commands;
             renderQuickCommands();
             hideModal('addCommandModal');
+            document.getElementById('cmdLabel').value = '';
+            document.getElementById('cmdCommand').value = '';
         }
     } catch (error) {
         console.error('Failed to add command:', error);
@@ -531,6 +686,7 @@ async function createDisplay() {
         }
         
         hideModal('newDisplayModal');
+        document.getElementById('displayNum').value = '';
         await refreshDisplays();
     } catch (error) {
         console.error('Failed to create display:', error);
@@ -944,8 +1100,13 @@ function setupEventListeners() {
     dom.socketInput.addEventListener('change', saveConfig);
     dom.prefixInput.addEventListener('change', saveConfig);
     
+    // Debounced resize handler for better performance
+    let resizeTimeout;
     window.addEventListener('resize', () => {
-        if (state.fitAddon) state.fitAddon.fit();
+        clearTimeout(resizeTimeout);
+        resizeTimeout = setTimeout(() => {
+            if (state.fitAddon) state.fitAddon.fit();
+        }, 100);
     });
     
     document.getElementById('sessionName').addEventListener('keydown', e => {
