@@ -21,11 +21,18 @@ class X11Manager:
     def _get_clean_env(self, display):
         """Get a clean environment for X11 processes without Wayland."""
         clean_env = os.environ.copy()
+        
+        # Remove Wayland-related variables to force X11
         clean_env.pop('WAYLAND_DISPLAY', None)
         clean_env.pop('XDG_SESSION_TYPE', None)
+        
+        # Set X11 display
         clean_env['DISPLAY'] = display
+        
+        # Force X11 backend for GUI toolkits
         clean_env['GDK_BACKEND'] = 'x11'
         clean_env['QT_QPA_PLATFORM'] = 'xcb'
+        
         return clean_env
     
     def _find_free_display(self, preferred=None):
@@ -61,7 +68,7 @@ class X11Manager:
         missing = [cmd for cmd in required if not shutil.which(cmd)]
         return missing
     
-    def start_display(self, display_num=None, width=1280, height=800):
+    def start_display(self, display_num=None, width=1280, height=800, depth=24):
         """
         Start an X11 virtual display.
         
@@ -69,6 +76,7 @@ class X11Manager:
             display_num: Preferred display number (e.g., 99 for :99). If None, auto-assign.
             width: Display width
             height: Display height
+            depth: Color depth (default 24)
             
         Returns:
             (display_info, error) tuple
@@ -106,12 +114,14 @@ class X11Manager:
         clean_env = self._get_clean_env(display)
         
         try:
-            # Start Xvfb
+            # Start Xvfb with GLX and RENDER extensions
             xvfb_cmd = [
                 "Xvfb", display,
-                "-screen", "0", f"{width}x{height}x24",
-                "-ac",
-                "+extension", "GLX"
+                "-screen", "0", f"{width}x{height}x{depth}",
+                "-ac",                    # Disable access control
+                "+extension", "GLX",      # Enable GLX extension
+                "+extension", "RENDER",   # Enable RENDER extension
+                "-nolisten", "tcp"        # Security: no TCP connections
             ]
             xvfb_proc = subprocess.Popen(
                 xvfb_cmd,
@@ -201,7 +211,7 @@ class X11Manager:
         
         info = self.displays[display_num]
         
-        # Kill processes
+        # Kill processes in reverse order
         for pid_key in ['ws_pid', 'vnc_pid', 'xvfb_pid']:
             pid = info.get(pid_key)
             if pid:
@@ -276,7 +286,7 @@ class X11Manager:
             self.stop_display(display_num)
     
     def get_env_setup_commands(self, display_num):
-        """Get shell commands to set up environment for a display."""
+        """Get shell commands to set up X11 environment for a display."""
         if display_num not in self.displays:
             return None
         
@@ -285,8 +295,13 @@ class X11Manager:
             f"export DISPLAY={display} && "
             f"unset WAYLAND_DISPLAY && "
             f"export GDK_BACKEND=x11 && "
-            f"export QT_QPA_PLATFORM=xcb && "
-            f"export LIBGL_ALWAYS_SOFTWARE=1 && "
-            f"export GALLIUM_DRIVER=llvmpipe && "
-            f"export MESA_GL_VERSION_OVERRIDE=3.3"
+            f"export QT_QPA_PLATFORM=xcb"
         )
+    
+    def get_env_dict(self, display_num):
+        """Get X11 environment variables as a dictionary for subprocess calls."""
+        if display_num not in self.displays:
+            return None
+        
+        display = self.displays[display_num]['display']
+        return self._get_clean_env(display)
