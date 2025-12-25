@@ -12,15 +12,46 @@ import select
 import threading
 import time
 import errno
+import re
 
 
 class PtyManager:
     """Manages PTY connections to tmux sessions."""
     
+    # Pattern to match OSC (Operating System Command) escape sequences
+    # These include color queries/responses (10, 11, 12) and palette settings (4;N)
+    # Format: ESC ] <code> ; <data> <terminator>
+    # Terminator can be BEL (\x07) or ST (ESC \)
+    OSC_PATTERN = re.compile(
+        r'\x1b\]'                    # ESC ]
+        r'(?:'
+        r'10|11|12|'                 # Foreground, background, cursor color
+        r'4;\d+|'                    # Color palette
+        r'104|110|111|112|'          # Reset color commands
+        r'52;[^\x07\x1b]*'           # Clipboard operations
+        r')'
+        r';[^\x07\x1b]*'             # Parameters
+        r'(?:\x07|\x1b\\)'           # Terminator: BEL or ST
+    )
+    
+    # Pattern for other problematic sequences that may leak through
+    # Includes some DCS (Device Control String) sequences
+    DCS_PATTERN = re.compile(
+        r'\x1bP[^\x1b]*\x1b\\'       # DCS ... ST
+    )
+    
     def __init__(self, tmux_manager, socketio):
         self.tmux_mgr = tmux_manager
         self.socketio = socketio
         self.connections = {}  # session_name -> connection info
+    
+    def _filter_escape_sequences(self, data):
+        """Filter out problematic escape sequences from terminal output."""
+        # Filter OSC sequences (color queries, clipboard, etc.)
+        data = self.OSC_PATTERN.sub('', data)
+        # Filter DCS sequences
+        data = self.DCS_PATTERN.sub('', data)
+        return data
     
     def _set_winsize(self, fd, rows, cols):
         """Set terminal window size."""
@@ -41,6 +72,8 @@ class PtyManager:
         if pid == 0:
             # Child process
             os.environ['TERM'] = 'xterm-256color'
+            # Disable color queries that cause issues
+            os.environ.pop('COLORFGBG', None)
             os.execlp('tmux', 'tmux', '-L', socket, 'attach', '-t', full_name)
         else:
             # Parent process
@@ -67,10 +100,14 @@ class PtyManager:
                             try:
                                 data = os.read(master_fd, 16384)
                                 if data:
-                                    self.socketio.emit('output', {
-                                        'session': full_name,
-                                        'data': data.decode('utf-8', errors='replace')
-                                    }, room=full_name)
+                                    decoded = data.decode('utf-8', errors='replace')
+                                    # Filter out problematic escape sequences
+                                    filtered = self._filter_escape_sequences(decoded)
+                                    if filtered:  # Only emit if there's content left
+                                        self.socketio.emit('output', {
+                                            'session': full_name,
+                                            'data': filtered
+                                        }, room=full_name)
                                 else:
                                     break  # EOF
                             except OSError as e:
