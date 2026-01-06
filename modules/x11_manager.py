@@ -1,5 +1,10 @@
 """
 X11 display management using Xvfb, x11vnc, and websockify.
+
+Fixed display configuration:
+  - GUI Panel 1: Display :100
+  - GUI Panel 2: Display :101
+  - GUI Panel 3: Display :102
 """
 
 import os
@@ -13,146 +18,123 @@ import socket as sock
 class X11Manager:
     """Manages X11 virtual displays for GUI applications."""
     
-    DISPLAY_BASE = 100
+    # Fixed display numbers - GUI panel index maps directly to display
+    FIXED_DISPLAYS = {
+        0: 100,  # GUI Panel 1 -> :100
+        1: 101,  # GUI Panel 2 -> :101
+        2: 102,  # GUI Panel 3 -> :102
+    }
+    
+    FIXED_VNC_PORTS = {
+        100: 5900,
+        101: 5901,
+        102: 5902,
+    }
+    
+    FIXED_WS_PORTS = {
+        100: 6100,
+        101: 6101,
+        102: 6102,
+    }
     
     def __init__(self):
-        self.displays = {}  # display_num -> display info
+        self.displays = {}
     
     def _get_clean_env(self, display):
-        """Get a clean environment for X11 processes without Wayland."""
         clean_env = os.environ.copy()
-        
-        # Remove Wayland-related variables to force X11
         clean_env.pop('WAYLAND_DISPLAY', None)
         clean_env.pop('XDG_SESSION_TYPE', None)
-        
-        # Set X11 display
         clean_env['DISPLAY'] = display
-        
-        # Force X11 backend for GUI toolkits
         clean_env['GDK_BACKEND'] = 'x11'
         clean_env['QT_QPA_PLATFORM'] = 'xcb'
-        
         return clean_env
     
-    def _find_free_display(self, preferred=None):
-        """Find a free X display number, optionally trying preferred first."""
-        if preferred is not None:
-            lock_file = f"/tmp/.X{preferred}-lock"
-            socket_file = f"/tmp/.X11-unix/X{preferred}"
-            if not os.path.exists(lock_file) and not os.path.exists(socket_file):
-                return preferred
-        
-        for display_num in range(self.DISPLAY_BASE, self.DISPLAY_BASE + 100):
-            lock_file = f"/tmp/.X{display_num}-lock"
-            socket_file = f"/tmp/.X11-unix/X{display_num}"
-            if not os.path.exists(lock_file) and not os.path.exists(socket_file):
-                return display_num
-        return None
+    def _is_display_available(self, display_num):
+        lock_file = f"/tmp/.X{display_num}-lock"
+        socket_file = f"/tmp/.X11-unix/X{display_num}"
+        return not os.path.exists(lock_file) and not os.path.exists(socket_file)
     
-    def _find_free_port(self, start, end):
-        """Find a free port in range."""
-        for port in range(start, end):
-            try:
-                s = sock.socket(sock.AF_INET, sock.SOCK_STREAM)
-                s.bind(('127.0.0.1', port))
-                s.close()
-                return port
-            except OSError:
-                continue
+    def _is_port_available(self, port):
+        try:
+            s = sock.socket(sock.AF_INET, sock.SOCK_STREAM)
+            s.bind(('127.0.0.1', port))
+            s.close()
+            return True
+        except OSError:
+            return False
+    
+    def get_display_for_panel(self, panel_index):
+        return self.FIXED_DISPLAYS.get(panel_index)
+    
+    def get_panel_for_display(self, display_num):
+        for panel, num in self.FIXED_DISPLAYS.items():
+            if num == display_num:
+                return panel
         return None
     
     def check_dependencies(self):
-        """Check if required X11 tools are installed."""
         required = ['Xvfb', 'x11vnc', 'websockify']
-        missing = [cmd for cmd in required if not shutil.which(cmd)]
-        return missing
+        return [cmd for cmd in required if not shutil.which(cmd)]
     
-    def start_display(self, display_num=None, width=1280, height=800, depth=24):
-        """
-        Start an X11 virtual display.
-        
-        Args:
-            display_num: Preferred display number (e.g., 99 for :99). If None, auto-assign.
-            width: Display width
-            height: Display height
-            depth: Color depth (default 24)
-            
-        Returns:
-            (display_info, error) tuple
-        """
+    def start_display(self, display_num=None, panel_index=None, width=1280, height=800, depth=24):
         missing = self.check_dependencies()
         if missing:
             return None, f"Missing dependencies: {', '.join(missing)}. Install with: sudo apt install xvfb x11vnc websockify"
         
-        # Find display number
-        actual_display_num = self._find_free_display(preferred=display_num)
-        if actual_display_num is None:
-            return None, "No free X display available"
+        if display_num is not None:
+            if display_num not in self.FIXED_DISPLAYS.values():
+                return None, f"Invalid display number {display_num}. Must be 100, 101, or 102"
+            actual_display_num = display_num
+        elif panel_index is not None:
+            if panel_index not in self.FIXED_DISPLAYS:
+                return None, f"Invalid panel index {panel_index}. Must be 0, 1, or 2"
+            actual_display_num = self.FIXED_DISPLAYS[panel_index]
+        else:
+            return None, "Must specify display_num or panel_index"
         
-        # Check if this display is already managed by us
         if actual_display_num in self.displays:
             info = self.displays[actual_display_num]
             return {
                 'display': info['display'],
                 'display_num': actual_display_num,
+                'panel_index': self.get_panel_for_display(actual_display_num),
                 'ws_port': info['ws_port'],
                 'width': info['width'],
                 'height': info['height']
             }, None
         
-        # Find ports
-        vnc_port = self._find_free_port(5900, 5999)
-        if vnc_port is None:
-            return None, "No free VNC port available"
+        vnc_port = self.FIXED_VNC_PORTS[actual_display_num]
+        ws_port = self.FIXED_WS_PORTS[actual_display_num]
         
-        ws_port = self._find_free_port(6080, 6180)
-        if ws_port is None:
-            return None, "No free WebSocket port available"
+        if not self._is_port_available(vnc_port):
+            return None, f"VNC port {vnc_port} is in use"
+        if not self._is_port_available(ws_port):
+            return None, f"WebSocket port {ws_port} is in use"
+        if not self._is_display_available(actual_display_num):
+            return None, f"Display :{actual_display_num} is in use by another process"
         
         display = f":{actual_display_num}"
         clean_env = self._get_clean_env(display)
         
         try:
-            # Start Xvfb with GLX and RENDER extensions
             xvfb_cmd = [
                 "Xvfb", display,
                 "-screen", "0", f"{width}x{height}x{depth}",
-                "-ac",                    # Disable access control
-                "+extension", "GLX",      # Enable GLX extension
-                "+extension", "RENDER",   # Enable RENDER extension
-                "-nolisten", "tcp"        # Security: no TCP connections
+                "-ac", "+extension", "GLX", "+extension", "RENDER", "-nolisten", "tcp"
             ]
-            xvfb_proc = subprocess.Popen(
-                xvfb_cmd,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                env=clean_env
-            )
+            xvfb_proc = subprocess.Popen(xvfb_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=clean_env)
             time.sleep(0.5)
             
             if xvfb_proc.poll() is not None:
                 _, stderr = xvfb_proc.communicate()
                 return None, f"Failed to start Xvfb: {stderr.decode()}"
             
-            # Start x11vnc
             vnc_cmd = [
-                "x11vnc",
-                "-display", display,
+                "x11vnc", "-display", display,
                 "-rfbport", str(vnc_port),
-                "-nopw",
-                "-forever",
-                "-shared",
-                "-noxdamage",
-                "-wait", "5",
-                "-defer", "5"
+                "-nopw", "-forever", "-shared", "-noxdamage", "-wait", "5", "-defer", "5"
             ]
-            vnc_proc = subprocess.Popen(
-                vnc_cmd,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                env=clean_env
-            )
+            vnc_proc = subprocess.Popen(vnc_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=clean_env)
             time.sleep(0.5)
             
             if vnc_proc.poll() is not None:
@@ -160,17 +142,8 @@ class X11Manager:
                 xvfb_proc.terminate()
                 return None, f"Failed to start x11vnc: {stderr.decode()}"
             
-            # Start websockify
-            ws_cmd = [
-                "websockify",
-                str(ws_port),
-                f"127.0.0.1:{vnc_port}"
-            ]
-            ws_proc = subprocess.Popen(
-                ws_cmd,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE
-            )
+            ws_cmd = ["websockify", str(ws_port), f"127.0.0.1:{vnc_port}"]
+            ws_proc = subprocess.Popen(ws_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
             time.sleep(0.3)
             
             if ws_proc.poll() is not None:
@@ -179,10 +152,10 @@ class X11Manager:
                 xvfb_proc.terminate()
                 return None, f"Failed to start websockify: {stderr.decode()}"
             
-            # Store display info
             self.displays[actual_display_num] = {
                 'display': display,
                 'display_num': actual_display_num,
+                'panel_index': self.get_panel_for_display(actual_display_num),
                 'xvfb_pid': xvfb_proc.pid,
                 'vnc_pid': vnc_proc.pid,
                 'vnc_port': vnc_port,
@@ -190,12 +163,13 @@ class X11Manager:
                 'ws_port': ws_port,
                 'width': width,
                 'height': height,
-                'sessions': set()  # Sessions using this display
+                'sessions': set()
             }
             
             return {
                 'display': display,
                 'display_num': actual_display_num,
+                'panel_index': self.get_panel_for_display(actual_display_num),
                 'ws_port': ws_port,
                 'width': width,
                 'height': height
@@ -204,14 +178,15 @@ class X11Manager:
         except Exception as e:
             return None, str(e)
     
+    def start_display_for_panel(self, panel_index, width=1280, height=800):
+        return self.start_display(panel_index=panel_index, width=width, height=height)
+    
     def stop_display(self, display_num):
-        """Stop an X11 display."""
         if display_num not in self.displays:
             return False, "Display not found"
         
         info = self.displays[display_num]
         
-        # Kill processes in reverse order
         for pid_key in ['ws_pid', 'vnc_pid', 'xvfb_pid']:
             pid = info.get(pid_key)
             if pid:
@@ -228,13 +203,11 @@ class X11Manager:
         return True, None
     
     def get_display(self, display_num):
-        """Get display info."""
         if display_num not in self.displays:
             return None
         
         info = self.displays[display_num]
         
-        # Check if still alive
         try:
             os.kill(info['xvfb_pid'], 0)
         except ProcessLookupError:
@@ -244,13 +217,13 @@ class X11Manager:
         return {
             'display': info['display'],
             'display_num': display_num,
+            'panel_index': self.get_panel_for_display(display_num),
             'ws_port': info['ws_port'],
             'width': info['width'],
             'height': info['height']
         }
     
     def list_displays(self):
-        """List all active displays."""
         result = []
         dead = []
         
@@ -260,6 +233,7 @@ class X11Manager:
                 result.append({
                     'display': info['display'],
                     'display_num': display_num,
+                    'panel_index': self.get_panel_for_display(display_num),
                     'ws_port': info['ws_port'],
                     'width': info['width'],
                     'height': info['height']
@@ -272,24 +246,33 @@ class X11Manager:
         
         return result
     
+    def get_fixed_config(self):
+        return {
+            'panels': [
+                {
+                    'panel_index': i,
+                    'display_num': self.FIXED_DISPLAYS[i],
+                    'display': f":{self.FIXED_DISPLAYS[i]}",
+                    'vnc_port': self.FIXED_VNC_PORTS[self.FIXED_DISPLAYS[i]],
+                    'ws_port': self.FIXED_WS_PORTS[self.FIXED_DISPLAYS[i]],
+                }
+                for i in range(3)
+            ]
+        }
+    
     def resize_display(self, display_num, width, height):
-        """Resize a display by restarting it."""
         if display_num not in self.displays:
             return None, "Display not found"
-        
         self.stop_display(display_num)
         return self.start_display(display_num=display_num, width=width, height=height)
     
     def cleanup_all(self):
-        """Clean up all displays."""
         for display_num in list(self.displays.keys()):
             self.stop_display(display_num)
     
     def get_env_setup_commands(self, display_num):
-        """Get shell commands to set up X11 environment for a display."""
         if display_num not in self.displays:
             return None
-        
         display = self.displays[display_num]['display']
         return (
             f"export DISPLAY={display} && "
@@ -299,9 +282,7 @@ class X11Manager:
         )
     
     def get_env_dict(self, display_num):
-        """Get X11 environment variables as a dictionary for subprocess calls."""
         if display_num not in self.displays:
             return None
-        
         display = self.displays[display_num]['display']
         return self._get_clean_env(display)
