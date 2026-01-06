@@ -978,7 +978,8 @@ async function connectGuiPanel(panelIndex, displayNum) {
     body.innerHTML = '<div style="color: var(--text-muted);">Connecting...</div>';
     
     try {
-        const RFB = (await import('https://cdn.jsdelivr.net/npm/@novnc/novnc@1.4.0/core/rfb.js')).default;
+        //const RFB = (await import('https://cdn.jsdelivr.net/npm/@novnc/novnc@1.4.0/core/rfb.js')).default;
+	const RFB = (await import('/static/js/novnc/core/rfb.js')).default;
         const wsUrl = 'ws://' + window.location.hostname + ':' + display.ws_port;
         
         body.innerHTML = '';
