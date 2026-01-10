@@ -9,7 +9,16 @@ Fixed Display Configuration:
 
 import uuid
 import signal
+import sys
 from flask import request, jsonify, render_template
+from modules.config import Config
+
+
+def debug_log(message, *args):
+    """Log debug messages when debug mode is enabled."""
+    if Config.debug_mode:
+        formatted = message % args if args else message
+        print(f"[ROUTES-DEBUG] {formatted}", file=sys.stderr, flush=True)
 
 
 def register_routes(app):
@@ -25,7 +34,24 @@ def register_routes(app):
     @app.route('/api/config', methods=['GET'])
     def get_config():
         mgrs = get_managers()
-        return jsonify(mgrs['config'].to_dict())
+        config_dict = mgrs['config'].to_dict()
+        # Add runtime settings
+        config_dict['open_mode'] = Config.open_mode
+        config_dict['debug_mode'] = Config.debug_mode
+        return jsonify(config_dict)
+    
+    @app.route('/api/runtime', methods=['GET'])
+    def get_runtime():
+        """Get runtime mode settings (set via command line flags)."""
+        return jsonify({
+            'open_mode': Config.open_mode,
+            'debug_mode': Config.debug_mode,
+            'shell_mode': 'open' if Config.open_mode else 'login',
+            'description': {
+                'open_mode': 'Shells start without requiring login' if Config.open_mode else 'Shells require user authentication',
+                'debug_mode': 'X11/GUI debug logging enabled' if Config.debug_mode else 'Debug logging disabled'
+            }
+        })
     
     @app.route('/api/config', methods=['POST', 'PATCH'])
     def update_config():
@@ -154,15 +180,20 @@ def register_routes(app):
         mgrs = get_managers()
         data = request.get_json() or {}
         
+        debug_log("connect_panel called: panel_index=%d, data=%s", panel_index, data)
+        
         if panel_index not in [0, 1, 2]:
+            debug_log("Invalid panel_index=%d", panel_index)
             return jsonify({'status': 'error', 'message': 'Invalid panel index. Must be 0, 1, or 2'}), 400
         
         width = data.get('width', 1280)
         height = data.get('height', 800)
         display_num = mgrs['x11'].get_display_for_panel(panel_index)
+        debug_log("Resolved display_num=%d for panel_index=%d", display_num, panel_index)
         
         existing = mgrs['x11'].get_display(display_num)
         if existing:
+            debug_log("Display :%d already exists: %s", display_num, existing)
             return jsonify({
                 'status': 'ok',
                 'display': existing,
@@ -170,10 +201,13 @@ def register_routes(app):
                 'message': f'Display :{display_num} already running'
             })
         
+        debug_log("Creating new display for panel %d", panel_index)
         result, error = mgrs['x11'].start_display_for_panel(panel_index, width=width, height=height)
         if error:
+            debug_log("Error creating display: %s", error)
             return jsonify({'status': 'error', 'message': error}), 400
         
+        debug_log("Display created successfully: %s", result)
         return jsonify({
             'status': 'ok',
             'display': result,
@@ -235,33 +269,59 @@ def register_routes(app):
         panel_index = data.get('panel_index')
         socket = data.get('socket')
         
+        debug_log("bind_display_to_session called: session=%s, display_num=%s, panel_index=%s, socket=%s",
+                  session, display_num, panel_index, socket)
+        
         if display_num is None and panel_index is not None:
             display_num = mgrs['x11'].get_display_for_panel(panel_index)
+            debug_log("Resolved display_num=%s from panel_index=%s", display_num, panel_index)
         
         if display_num is None:
+            debug_log("ERROR: No display_num or panel_index provided")
             return jsonify({'status': 'error', 'message': 'display_num or panel_index required'}), 400
         
         display_info = mgrs['x11'].get_display(display_num)
         if not display_info:
+            debug_log("ERROR: Display :%d not found", display_num)
             return jsonify({'status': 'error', 'message': f'Display :{display_num} not found'}), 404
+        
+        debug_log("Display info: %s", display_info)
         
         full_name = mgrs['tmux'].get_full_name(session)
         if not mgrs['tmux'].session_exists(full_name, socket=socket):
+            debug_log("ERROR: Session %s not found", full_name)
             return jsonify({'status': 'error', 'message': 'Session not found'}), 404
         
         display = f":{display_num}"
+        debug_log("Setting environment variables for session %s to use display %s", full_name, display)
+        
         mgrs['tmux'].set_environment(full_name, "DISPLAY", display, socket=socket)
+        debug_log("Set DISPLAY=%s", display)
+        
         mgrs['tmux'].set_environment(full_name, "WAYLAND_DISPLAY", unset=True, socket=socket)
+        debug_log("Unset WAYLAND_DISPLAY")
+        
         mgrs['tmux'].set_environment(full_name, "GDK_BACKEND", "x11", socket=socket)
+        debug_log("Set GDK_BACKEND=x11")
+        
         mgrs['tmux'].set_environment(full_name, "QT_QPA_PLATFORM", "xcb", socket=socket)
+        debug_log("Set QT_QPA_PLATFORM=xcb")
+        
         mgrs['tmux'].set_environment(full_name, "LIBGL_ALWAYS_SOFTWARE", "1", socket=socket)
+        debug_log("Set LIBGL_ALWAYS_SOFTWARE=1")
+        
         mgrs['tmux'].set_environment(full_name, "GALLIUM_DRIVER", "llvmpipe", socket=socket)
+        debug_log("Set GALLIUM_DRIVER=llvmpipe")
+        
         mgrs['tmux'].set_environment(full_name, "MESA_GL_VERSION_OVERRIDE", "3.3", socket=socket)
+        debug_log("Set MESA_GL_VERSION_OVERRIDE=3.3")
         
         env_cmd = mgrs['x11'].get_env_setup_commands(display_num)
         if env_cmd:
+            debug_log("Sending env setup command to PTY: %s", env_cmd)
             mgrs['pty'].send_keys(full_name, env_cmd + '\n')
         
+        debug_log("bind_display_to_session complete for session=%s, display=%s", full_name, display)
         return jsonify({
             'status': 'ok',
             'session': full_name,

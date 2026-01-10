@@ -6,6 +6,15 @@ import os
 import subprocess
 import signal
 import time
+import sys
+from modules.config import Config
+
+
+def debug_log(message, *args):
+    """Log debug messages when debug mode is enabled."""
+    if Config.debug_mode:
+        formatted = message % args if args else message
+        print(f"[TMUX-DEBUG] {formatted}", file=sys.stderr, flush=True)
 
 
 class TmuxManager:
@@ -20,6 +29,39 @@ class TmuxManager:
         cmd = ["tmux", "-L", socket] + list(args)
         result = subprocess.run(cmd, capture_output=True, text=True)
         return result
+    
+    def _get_login_command(self):
+        """Return a command that implements a login prompt.
+        
+        Uses a bash script that prompts for username and uses 'su -l' to 
+        authenticate and start a login shell. This approach works without
+        requiring root privileges.
+        """
+        # Create a simple login wrapper script inline
+        # This prompts for username, then uses su to authenticate
+        login_script = '''bash -c '
+while true; do
+    echo ""
+    echo "================================"
+    echo "  Terminal Login Required"
+    echo "================================"
+    echo ""
+    read -p "Username: " username
+    if [ -n "$username" ]; then
+        su -l "$username"
+        exit_code=$?
+        if [ $exit_code -eq 0 ]; then
+            break
+        else
+            echo ""
+            echo "Login failed. Please try again."
+            sleep 1
+        fi
+    fi
+done
+'
+'''
+        return login_script.strip()
     
     def get_sessions(self, socket=None):
         """List all sessions with our prefix."""
@@ -42,7 +84,12 @@ class TmuxManager:
         return name if name.startswith(prefix) else f"{prefix}{name}"
     
     def create_session(self, name, cwd=None, initial_cmd=None, socket=None):
-        """Create a new tmux session."""
+        """Create a new tmux session.
+        
+        The session shell behavior depends on Config.open_mode:
+        - If True (--open): Shell starts without login (direct bash)
+        - If False (default): Shell requires user login (via su -l)
+        """
         prefix = self.config.session_prefix
         full_name = f"{prefix}{name}"
         
@@ -53,6 +100,15 @@ class TmuxManager:
         cmd_args = ["new-session", "-d", "-s", full_name, "-x", "80", "-y", "24"]
         if cwd and os.path.isdir(cwd):
             cmd_args.extend(["-c", cwd])
+        
+        # If not in open mode, start with a login prompt
+        if not Config.open_mode:
+            # Use our login wrapper script that prompts for user/pass via su
+            login_cmd = self._get_login_command()
+            cmd_args.append(login_cmd)
+            debug_log("Creating session %s with login prompt (login mode)", full_name)
+        else:
+            debug_log("Creating session %s with direct shell (open mode)", full_name)
         
         result = self._run(*cmd_args, socket=socket)
         if result.returncode != 0:
@@ -65,8 +121,8 @@ class TmuxManager:
         self._run("set-window-option", "-t", full_name, "aggressive-resize", "on", socket=socket)
         self._run("set-option", "-t", full_name, "default-terminal", "xterm-256color", socket=socket)
         
-        # Run initial command if provided
-        if initial_cmd:
+        # Run initial command if provided (only in open mode, as login mode needs auth first)
+        if initial_cmd and Config.open_mode:
             time.sleep(0.2)
             self._run("send-keys", "-t", full_name, initial_cmd, "Enter", socket=socket)
         

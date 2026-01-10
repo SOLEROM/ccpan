@@ -20,6 +20,10 @@ DEFAULT_CONFIG = {
 class Config:
     """Manages application configuration."""
     
+    # Runtime settings (not persisted to file)
+    open_mode = False   # If True (--open flag), shells open without login; if False (default), require login
+    debug_mode = False  # If True (--debug flag), enable debug logging for X11/GUI operations
+    
     def __init__(self, config_file='config.json'):
         self.config_file = config_file
         self._config = DEFAULT_CONFIG.copy()

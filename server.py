@@ -87,7 +87,18 @@ def main():
                         help='Make server accessible on local network (0.0.0.0). Default is localhost only.')
     parser.add_argument('--port', type=int, default=5000,
                         help='Port to run server on (default: 5000)')
+    parser.add_argument('--open', action='store_true',
+                        help='Open mode: shells start without requiring login (default if flag provided). '
+                             'Without this flag, new shells require user login.')
+    parser.add_argument('--debug', action='store_true',
+                        help='Enable debug logging for X11/GUI terminal operations. '
+                             'Useful for troubleshooting display binding issues on different hosts.')
     args = parser.parse_args()
+    
+    # Configure runtime settings based on arguments
+    from modules.config import Config
+    Config.open_mode = args.open
+    Config.debug_mode = args.debug
     
     host = '0.0.0.0' if args.public else '127.0.0.1'
     port = args.port
@@ -106,6 +117,10 @@ def main():
         except:
             local_ip = 'your-local-ip'
     
+    # Build mode indicator string
+    shell_mode = "OPEN (no login required)" if args.open else "LOGIN (authentication required)"
+    debug_status = "ENABLED" if args.debug else "disabled"
+    
     print(f"""
 ╔══════════════════════════════════════════════════════════════════╗
 ║            Tmux Control Panel v4 - Multi-Display                 ║
@@ -116,6 +131,10 @@ def main():
 ║  • Each GUI display has configurable DISPLAY number              ║
 ║  • Direct PTY streaming with WebSocket                           ║
 ║  • X11 GUI via Xvfb + x11vnc + websockify                        ║
+╠══════════════════════════════════════════════════════════════════╣
+║  Runtime Settings:                                               ║
+║  • Shell Mode: {shell_mode:<47}║
+║  • Debug Mode: {debug_status:<47}║
 ╚══════════════════════════════════════════════════════════════════╝
 """)
     
@@ -126,6 +145,13 @@ def main():
     else:
         print(f"Server starting on http://{host}:{port}")
         print(f"Use --public flag to make accessible on local network")
+    
+    if args.debug:
+        print(f"\n🔍 Debug mode enabled - X11/GUI operations will be logged to stderr")
+    
+    if not args.open:
+        print(f"\n🔐 Login mode: New shells will require user authentication")
+        print(f"   Use --open flag to disable login requirement")
     
     socketio.run(app, host=host, port=port, debug=False)
 

@@ -51,6 +51,54 @@ pip install flask flask-socketio flask-cors eventlet
 
 4. **Open in browser**: http://127.0.0.1:5000
 
+## Command Line Options
+
+```bash
+python server.py [OPTIONS]
+```
+
+| Option | Description |
+|--------|-------------|
+| `--public` | Make server accessible on local network (0.0.0.0). Default is localhost only. |
+| `--port PORT` | Port to run server on (default: 5000) |
+| `--open` | Open mode: shells start without requiring login. Without this flag, new shells require user authentication. |
+| `--debug` | Enable debug logging for X11/GUI terminal operations. Useful for troubleshooting display binding issues on different hosts. |
+
+### Examples
+
+```bash
+# Run on localhost with login required (default - most secure)
+python server.py
+
+# Run on localhost with open shells (no login required)
+python server.py --open
+
+# Run on local network with debug logging
+python server.py --public --debug
+
+# Run on custom port with all options
+python server.py --port 8080 --public --open --debug
+```
+
+### Shell Modes
+
+- **Login Mode** (default): Each new terminal session shows a login prompt asking for username and password. Uses `su -l` for authentication. This is the recommended mode for shared or public networks.
+- **Open Mode** (`--open`): Shells start directly without login prompts, running as the user who started the server. Convenient for local development but less secure.
+
+### Debug Mode
+
+The `--debug` flag enables verbose logging for X11/GUI operations to stderr. This is particularly useful when:
+- GUI applications fail to display
+- Display binding doesn't work on certain hosts
+- Troubleshooting Xvfb, x11vnc, or websockify issues
+
+Debug output includes:
+- Display creation/destruction events
+- Port availability checks
+- Process spawn information
+- Environment variable setup
+- Error details with stack traces
+
 ## Usage Guide
 
 ### Managing Sessions
