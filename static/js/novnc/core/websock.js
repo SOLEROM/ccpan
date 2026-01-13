@@ -234,11 +234,12 @@ export default class Websock {
     attach(rawChannel) {
         this.init();
 
-        // Must get object and class methods to be compatible with the tests.
-        const channelProps = [...Object.keys(rawChannel), ...Object.getOwnPropertyNames(Object.getPrototypeOf(rawChannel))];
+        // Check for required WebSocket-like properties
+        // Note: Some browsers (Chrome) don't enumerate WebSocket prototype properties
+        // so we check for them directly instead of using Object.getOwnPropertyNames
         for (let i = 0; i < rawChannelProps.length; i++) {
             const prop = rawChannelProps[i];
-            if (channelProps.indexOf(prop) < 0) {
+            if (!(prop in rawChannel)) {
                 throw new Error('Raw channel missing property: ' + prop);
             }
         }
